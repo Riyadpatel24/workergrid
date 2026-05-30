@@ -45,3 +45,25 @@ def create_task(
         "task_id": new_task.id,
         "status": new_task.status
     }
+    
+@app.get("/tasks/{task_id}")
+def get_task(
+    task_id: int,
+    db: Session = Depends(get_db)
+):
+    task = db.query(Task).filter(
+        Task.id == task_id
+    ).first()
+
+    if not task:
+        return {
+            "error": "Task not found"
+        }
+
+    return {
+        "id": task.id,
+        "type": task.type,
+        "status": task.status,
+        "payload": task.payload,
+        "result": task.result
+    }
