@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: workergrid_postgres
+    environment:
+      POSTGRES_USER: workergrid
+      POSTGRES_PASSWORD: workergrid
+      POSTGRES_DB: workergrid
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    container_name: workergrid_redis
+    ports:
+      - "6379:6379"
