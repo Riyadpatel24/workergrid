@@ -8,6 +8,8 @@ from app.db.database import engine
 
 from app.db.dependencies import get_db
 
+from app.queue.redis_client import redis_client
+
 from app.models.task import Task
 
 from app.api.schemas import TaskCreate
@@ -40,10 +42,13 @@ def create_task(
     db.commit()
 
     db.refresh(new_task)
+    
+    redis_client.rpush("task_queue", new_task.id)
 
     return {
         "task_id": new_task.id,
-        "status": new_task.status
+        "status": new_task.status,
+        "queued": True
     }
     
 @app.get("/tasks/{task_id}")
