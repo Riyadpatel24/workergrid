@@ -24,6 +24,8 @@ def process_task(task_id: int):
         task.status = "PROCESSING"
 
         db.commit()
+        
+        print(f"Task {task_id} started")
 
         time.sleep(5)
 
