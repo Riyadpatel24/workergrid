@@ -24,10 +24,14 @@ def process_task(task_id: int):
         task.status = "PROCESSING"
 
         db.commit()
-        
+
         print(f"Task {task_id} started")
 
         time.sleep(5)
+
+        if task.payload.get("fail"):
+
+            raise Exception("Simulated failure")
 
         task.status = "SUCCESS"
 
@@ -39,9 +43,21 @@ def process_task(task_id: int):
 
         print(f"Task {task_id} completed")
 
-    finally:
-        db.close()
+    except Exception as e:
 
+        task.status = "FAILED"
+
+        task.result = {
+            "error": str(e)
+        }
+
+        db.commit()
+
+        print(f"Task {task_id} failed")
+
+    finally:
+
+        db.close()
 
 while True:
 

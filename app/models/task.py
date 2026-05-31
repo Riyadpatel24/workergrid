@@ -15,6 +15,8 @@ class Task(Base):
 
     status = Column(String)
 
+    retries = Column(Integer, default=0)
+
     payload = Column(JSON)
 
     result = Column(JSON, nullable=True)
