@@ -45,15 +45,41 @@ def process_task(task_id: int):
 
     except Exception as e:
 
-        task.status = "FAILED"
+        task.retries = (task.retries or 0) + 1
 
-        task.result = {
-            "error": str(e)
-        }
+        if task.retries < 3:
 
-        db.commit()
+            task.status = "PENDING"
 
-        print(f"Task {task_id} failed")
+            db.commit()
+
+            redis_client.rpush(
+                "task_queue",
+                task.id
+            )
+
+            print(
+                f"Task {task_id} retry {task.retries}"
+            )
+
+        else:
+
+            task.status = "FAILED"
+
+            task.result = {
+                "error": str(e)
+            }
+
+            db.commit()
+
+            redis_client.rpush(
+                "dead_letter_queue",
+                task.id
+            )
+
+            print(
+                f"Task {task_id} moved to DLQ"
+            )
 
     finally:
 
