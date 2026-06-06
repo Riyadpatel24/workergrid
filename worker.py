@@ -11,6 +11,14 @@ from app.queue.redis_client import redis_client
 
 WORKER_ID = os.getpid()
 
+def send_heartbeat():
+
+    redis_client.hset(
+        "worker_heartbeats",
+        WORKER_ID,
+        int(time.time())
+    )
+
 
 def process_task(task_id: int):
 
@@ -97,6 +105,8 @@ def process_task(task_id: int):
 
 
 while True:
+
+    send_heartbeat()
 
     task = redis_client.lpop("task_queue")
 

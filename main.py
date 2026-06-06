@@ -14,6 +14,8 @@ from app.models.task import Task
 
 from app.api.schemas import TaskCreate
 
+import time
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -71,4 +73,66 @@ def get_task(
         "status": task.status,
         "payload": task.payload,
         "result": task.result
+    }
+    
+@app.get("/workers")
+def get_workers():
+
+    workers = redis_client.hgetall(
+        "worker_heartbeats"
+    )
+
+    result = []
+
+    for worker_id, last_seen in workers.items():
+
+        result.append({
+            "worker_id": int(worker_id),
+            "last_seen": int(last_seen)
+        })
+
+    return result
+
+@app.get("/stats")
+def get_stats(
+    db: Session = Depends(get_db)
+):
+
+    queued_tasks = redis_client.llen(
+        "task_queue"
+    )
+
+    dead_letter_tasks = redis_client.llen(
+        "dead_letter_queue"
+    )
+
+    active_workers = len(
+        redis_client.hgetall(
+            "worker_heartbeats"
+        )
+    )
+
+    successful_tasks = db.query(
+        Task
+    ).filter(
+        Task.status == "SUCCESS"
+    ).count()
+
+    failed_tasks = db.query(
+        Task
+    ).filter(
+        Task.status == "FAILED"
+    ).count()
+
+    return {
+
+        "queued_tasks": queued_tasks,
+
+        "dead_letter_tasks": dead_letter_tasks,
+
+        "active_workers": active_workers,
+
+        "successful_tasks": successful_tasks,
+
+        "failed_tasks": failed_tasks
     }
