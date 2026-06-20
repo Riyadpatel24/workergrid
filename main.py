@@ -14,7 +14,10 @@ from app.models.task import Task
 
 from app.api.schemas import TaskCreate
 
+from datetime import datetime, timedelta
+
 import time
+
 
 Base.metadata.create_all(bind=engine)
 
@@ -36,7 +39,18 @@ def create_task(
     new_task = Task(
         type=task.type,
         payload=task.payload,
-        status="PENDING"
+        status=(
+            "SCHEDULED"
+            if task.delay > 0
+            else "PENDING"
+        ),
+        
+        priority=task.priority,
+        
+        scheduled_at=(
+            datetime.utcnow()
+            + timedelta(seconds=task.delay)
+        )
     )
 
     db.add(new_task)
@@ -45,12 +59,15 @@ def create_task(
 
     db.refresh(new_task)
     
-    redis_client.rpush("task_queue", new_task.id)
+    if task.delay == 0:
+        redis_client.rpush("task_queue", new_task.id)
 
     return {
         "task_id": new_task.id,
         "status": new_task.status,
-        "queued": True
+        "priority": new_task.priority,
+        "scheduled_at": new_task.scheduled_at,
+        "queued": task.delay == 0
     }
     
 @app.get("/tasks/{task_id}")
@@ -115,7 +132,7 @@ def get_stats(
     successful_tasks = db.query(
         Task
     ).filter(
-        Task.status == "SUCCESS"
+        Task.status == "COMPLETED"
     ).count()
 
     failed_tasks = db.query(
