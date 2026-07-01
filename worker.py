@@ -11,6 +11,9 @@ from app.queue.redis_client import redis_client
 
 WORKER_ID = os.getpid()
 
+MAX_RETRIES = 3
+BASE_DELAY = 2      # seconds
+
 def send_heartbeat():
 
     redis_client.hset(
@@ -64,12 +67,21 @@ def process_task(task_id: int):
     except Exception as e:
 
         task.retries = (task.retries or 0) + 1
+        delay = BASE_DELAY ** task.retries
 
-        if task.retries < 3:
+        if task.retries < MAX_RETRIES:
 
             task.status = "PENDING"
 
             db.commit()
+            
+            print(
+                f"[Worker {WORKER_ID}] "
+                f"Retry {task.retries} "
+                f"in {delay} seconds..."
+            )
+
+            time.sleep(delay)
 
             redis_client.rpush(
                 "task_queue",
