@@ -1,5 +1,7 @@
 import os
 import time
+import socket
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -10,6 +12,10 @@ from app.queue.redis_client import redis_client
 
 
 WORKER_ID = os.getpid()
+
+HOSTNAME = socket.gethostname()
+
+WORKER_VERSION = "1.1"
 
 MAX_RETRIES = 3
 BASE_DELAY = 2      # seconds
@@ -22,6 +28,11 @@ def send_heartbeat():
         int(time.time())
     )
 
+    redis_client.hset(
+        f"worker:{WORKER_ID}",
+        "last_heartbeat",
+        int(time.time())
+    )
 
 def process_task(task_id: int):
 
@@ -37,12 +48,24 @@ def process_task(task_id: int):
             return
 
         task.status = "PROCESSING"
+        task.started_at = datetime.utcnow()
 
         db.commit()
+
+        redis_client.hset(
+            f"worker:{WORKER_ID}",
+            mapping={
+                "status": "BUSY",
+                "current_task": task.id
+            }
+        )
 
         print(
             f"[Worker {WORKER_ID}] Task {task_id} started"
         )
+        if task.payload.get("crash"):
+            print(f"[Worker {WORKER_ID}] Simulating Crash...")
+            os._exit(1)
 
         time.sleep(5)
 
@@ -52,6 +75,8 @@ def process_task(task_id: int):
 
         task.status = "SUCCESS"
 
+        task.completed_at = datetime.utcnow()
+
         task.retries = 0
 
         task.result = {
@@ -59,12 +84,28 @@ def process_task(task_id: int):
         }
 
         db.commit()
+        
+        redis_client.hset(
+            f"worker:{WORKER_ID}",
+            mapping={
+                "status": "ONLINE",
+                "current_task": ""
+            }
+        )
+
+        redis_client.hincrby(
+            f"worker:{WORKER_ID}",
+            "completed_tasks",
+            1
+        )
 
         print(
             f"[Worker {WORKER_ID}] Task {task_id} completed"
         )
 
     except Exception as e:
+        
+        task.last_error = str(e)
 
         task.retries = (task.retries or 0) + 1
         delay = BASE_DELAY ** task.retries
@@ -87,6 +128,14 @@ def process_task(task_id: int):
                 "task_queue",
                 task.id
             )
+            
+            redis_client.hset(
+                f"worker:{WORKER_ID}",
+                mapping={
+                    "status": "ONLINE",
+                    "current_task": ""
+                }
+            )
 
             print(
                 f"[Worker {WORKER_ID}] Task {task_id} retry {task.retries}"
@@ -95,6 +144,8 @@ def process_task(task_id: int):
         else:
 
             task.status = "FAILED"
+
+            task.completed_at = datetime.utcnow()
 
             task.result = {
                 "error": str(e)
@@ -106,6 +157,20 @@ def process_task(task_id: int):
                 "dead_letter_queue",
                 task.id
             )
+            
+            redis_client.hset(
+                f"worker:{WORKER_ID}",
+                mapping={
+                    "status": "ONLINE",
+                    "current_task": ""
+                }
+            )
+
+            redis_client.hincrby(
+                f"worker:{WORKER_ID}",
+                "failed_tasks",
+                1
+            )
 
             print(
                 f"[Worker {WORKER_ID}] Task {task_id} moved to DLQ"
@@ -115,6 +180,28 @@ def process_task(task_id: int):
 
         db.close()
 
+def register_worker():
+
+    redis_client.hset(
+        f"worker:{WORKER_ID}",
+        mapping={
+            "worker_id": WORKER_ID,
+            "hostname": HOSTNAME,
+            "status": "ONLINE",
+            "started_at": int(time.time()),
+            "last_heartbeat": int(time.time()),
+            "current_task": "",
+            "completed_tasks": 0,
+            "failed_tasks": 0,
+            "version": WORKER_VERSION
+        }
+    )
+
+    print(
+        f"[Worker {WORKER_ID}] Registered"
+    )
+
+register_worker()
 
 while True:
 

@@ -133,6 +133,22 @@ FAILED
 DEAD LETTER QUEUE
 ```
 
+# 🔁 Retry Strategy
+
+WorkerGrid automatically retries failed tasks using **Exponential Retry Backoff**.
+
+Retry Schedule
+
+```text
+Retry #1 → Wait 2 seconds
+
+Retry #2 → Wait 4 seconds
+
+Retry #3 → Move to Dead Letter Queue
+```
+
+This prevents retry storms and gives external services time to recover before another retry is attempted.
+
 ---
 
 # 🛠 Tech Stack
@@ -304,8 +320,10 @@ Run multiple worker instances for parallel task execution.
 ## Reliability
 
 * Automatic retries
-* Dead Letter Queue
+* Exponential Retry Backoff
+* Dead Letter Queue (DLQ)
 * Failure recovery
+* Task state tracking
 
 ## Monitoring
 
@@ -319,9 +337,18 @@ Run multiple worker instances for parallel task execution.
 
 ## WorkerGrid v1.1
 
-* Priority queues
-* Task cancellation
-* Enhanced monitoring
+Completed
+
+- ✅ Priority Queue
+- ✅ Delayed Tasks
+- ✅ Exponential Retry Backoff
+
+Planned
+
+- Worker Registry
+- Task Cancellation
+- Enhanced Monitoring
+- Dashboard
 
 ## WorkerGrid v2
 
@@ -355,5 +382,21 @@ WorkerGrid was built to explore the backend engineering concepts behind modern d
 The project focuses on asynchronous job execution, fault tolerance, worker coordination, and operational monitoring while providing a reusable foundation for future applications.
 
 ---
+
+# 📚 Engineering Concepts Demonstrated
+
+WorkerGrid explores several backend engineering concepts:
+
+- Producer–Consumer Architecture
+- Background Job Processing
+- Redis-based Task Queues
+- Asynchronous Processing
+- Worker Processes
+- Retry Mechanisms
+- Exponential Retry Backoff
+- Dead Letter Queue (DLQ)
+- Worker Heartbeats
+- Operational Monitoring
+
 
 ⭐ If you found this project interesting, consider giving it a star.

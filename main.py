@@ -95,61 +95,296 @@ def get_task(
 @app.get("/workers")
 def get_workers():
 
-    workers = redis_client.hgetall(
-        "worker_heartbeats"
-    )
+    worker_keys = redis_client.keys("worker:*")
 
-    result = []
+    workers = []
 
-    for worker_id, last_seen in workers.items():
+    for key in worker_keys:
 
-        result.append({
-            "worker_id": int(worker_id),
-            "last_seen": int(last_seen)
+        worker = redis_client.hgetall(key)
+
+        workers.append({
+
+            "worker_id": int(worker["worker_id"]),
+
+            "hostname": worker["hostname"],
+
+            "status": worker["status"],
+
+            "started_at": int(worker["started_at"]),
+
+            "last_heartbeat": int(worker["last_heartbeat"]),
+
+            "current_task": (
+                int(worker["current_task"])
+                if worker["current_task"]
+                else None
+            ),
+
+            "completed_tasks": int(worker["completed_tasks"]),
+
+            "failed_tasks": int(worker["failed_tasks"]),
+
+            "version": worker["version"]
+
         })
 
-    return result
+    return workers
 
 @app.get("/stats")
 def get_stats(
     db: Session = Depends(get_db)
 ):
 
-    queued_tasks = redis_client.llen(
-        "task_queue"
+    # Queue Metrics
+    queued_tasks = redis_client.llen("task_queue")
+    dead_letter_tasks = redis_client.llen("dead_letter_queue")
+
+    # Worker Metrics
+    worker_keys = redis_client.keys("worker:*")
+
+    online_workers = 0
+    busy_workers = 0
+
+    for key in worker_keys:
+
+        status = redis_client.hget(key, "status")
+
+        if status == "ONLINE":
+            online_workers += 1
+
+        elif status == "BUSY":
+            busy_workers += 1
+
+    # Task Metrics
+    pending_tasks = db.query(Task).filter(
+        Task.status == "PENDING"
+    ).count()
+
+    processing_tasks = db.query(Task).filter(
+        Task.status == "PROCESSING"
+    ).count()
+
+    scheduled_tasks = db.query(Task).filter(
+        Task.status == "SCHEDULED"
+    ).count()
+
+    successful_tasks = db.query(Task).filter(
+        Task.status == "SUCCESS"
+    ).count()
+
+    failed_tasks = db.query(Task).filter(
+        Task.status == "FAILED"
+    ).count()
+
+    # Performance Metrics
+    completed_tasks = db.query(Task).filter(
+        Task.started_at.isnot(None),
+        Task.completed_at.isnot(None)
+    ).all()
+
+    total_time = 0
+
+    for task in completed_tasks:
+        total_time += (
+            task.completed_at -
+            task.started_at
+        ).total_seconds()
+
+    average_processing_time = (
+        total_time / len(completed_tasks)
+        if completed_tasks else 0
     )
+
+    return {
+
+        "workers": {
+            "online": online_workers,
+            "busy": busy_workers
+        },
+
+        "tasks": {
+            "queued": queued_tasks,
+            "pending": pending_tasks,
+            "processing": processing_tasks,
+            "scheduled": scheduled_tasks,
+            "dead_letter": dead_letter_tasks
+        },
+
+        "performance": {
+            "successful": successful_tasks,
+            "failed": failed_tasks,
+            "average_processing_time": round(
+                average_processing_time,
+                2
+            )
+        }
+    }
+
+@app.get("/dashboard")
+def dashboard(
+    db: Session = Depends(get_db)
+):
+
+    # ------------------------
+    # Queue Metrics
+    # ------------------------
+
+    queued_tasks = redis_client.llen("task_queue")
 
     dead_letter_tasks = redis_client.llen(
         "dead_letter_queue"
     )
 
-    active_workers = len(
-        redis_client.hgetall(
-            "worker_heartbeats"
-        )
-    )
+    # ------------------------
+    # Worker Metrics
+    # ------------------------
 
-    successful_tasks = db.query(
-        Task
-    ).filter(
-        Task.status == "COMPLETED"
+    worker_keys = redis_client.keys("worker:*")
+
+    online_workers = 0
+    busy_workers = 0
+
+    for key in worker_keys:
+
+        status = redis_client.hget(
+            key,
+            "status"
+        )
+
+        if status == "ONLINE":
+            online_workers += 1
+
+        elif status == "BUSY":
+            busy_workers += 1
+
+    # ------------------------
+    # Task Metrics
+    # ------------------------
+
+    pending_tasks = db.query(Task).filter(
+        Task.status == "PENDING"
     ).count()
 
-    failed_tasks = db.query(
-        Task
-    ).filter(
+    processing_tasks = db.query(Task).filter(
+        Task.status == "PROCESSING"
+    ).count()
+
+    scheduled_tasks = db.query(Task).filter(
+        Task.status == "SCHEDULED"
+    ).count()
+
+    successful_tasks = db.query(Task).filter(
+        Task.status == "SUCCESS"
+    ).count()
+
+    failed_tasks = db.query(Task).filter(
         Task.status == "FAILED"
     ).count()
 
+    # ------------------------
+    # Performance Metrics
+    # ------------------------
+
+    completed_tasks = db.query(Task).filter(
+        Task.started_at.isnot(None),
+        Task.completed_at.isnot(None)
+    ).all()
+
+    total_processing_time = 0
+
+    for task in completed_tasks:
+
+        total_processing_time += (
+            task.completed_at -
+            task.started_at
+        ).total_seconds()
+
+    average_processing_time = (
+        total_processing_time /
+        len(completed_tasks)
+        if completed_tasks
+        else 0
+    )
+
+    # ------------------------
+    # Health Check
+    # ------------------------
+
+    alerts = []
+
+    system_status = "HEALTHY"
+
+    if queued_tasks > 10:
+
+        alerts.append(
+            "High Task Queue Size"
+        )
+
+    if dead_letter_tasks > 0:
+
+        alerts.append(
+            f"{dead_letter_tasks} task(s) in Dead Letter Queue"
+        )
+
+    if (
+        online_workers > 0 and
+        busy_workers == online_workers
+    ):
+
+        alerts.append(
+            "All Workers Are Busy"
+        )
+
+    if len(alerts) > 0:
+
+        system_status = "WARNING"
+
+    # ------------------------
+    # Dashboard Response
+    # ------------------------
+
     return {
 
-        "queued_tasks": queued_tasks,
+        "timestamp": datetime.utcnow(),
 
-        "dead_letter_tasks": dead_letter_tasks,
+        "system_status": system_status,
 
-        "active_workers": active_workers,
+        "workers": {
 
-        "successful_tasks": successful_tasks,
+            "online": online_workers,
 
-        "failed_tasks": failed_tasks
+            "busy": busy_workers
+
+        },
+
+        "tasks": {
+
+            "queued": queued_tasks,
+
+            "pending": pending_tasks,
+
+            "processing": processing_tasks,
+
+            "scheduled": scheduled_tasks,
+
+            "dead_letter": dead_letter_tasks
+
+        },
+
+        "performance": {
+
+            "successful": successful_tasks,
+
+            "failed": failed_tasks,
+
+            "average_processing_time": round(
+                average_processing_time,
+                2
+            )
+
+        },
+
+        "alerts": alerts
+
     }
