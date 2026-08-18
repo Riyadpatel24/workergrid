@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <title>WorkerGrid Operations Console</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>🚀 WorkerGrid Operations Console</h1>
+
+    <hr>
+
+    <div id="dashboard">
+
+        Loading...
+
+    </div>
+
+</div>
+
+<script>
+
+async function loadDashboard(){
+
+    const response = await fetch("/dashboard");
+
+    const data = await response.json();
+
+    document.getElementById("dashboard").innerHTML = `
+
+<h2>System Status</h2>
+
+<p>${data.system_status}</p>
+
+<hr>
+
+<h2>Workers</h2>
+
+<p>Online : ${data.workers.online}</p>
+
+<p>Busy : ${data.workers.busy}</p>
+
+<hr>
+
+<h2>Tasks</h2>
+
+<p>Queued : ${data.tasks.queued}</p>
+
+<p>Pending : ${data.tasks.pending}</p>
+
+<p>Processing : ${data.tasks.processing}</p>
+
+<p>Scheduled : ${data.tasks.scheduled}</p>
+
+<p>Dead Letter Queue : ${data.tasks.dead_letter}</p>
+
+<hr>
+
+<h2>Performance</h2>
+
+<p>Successful : ${data.performance.successful}</p>
+
+<p>Failed : ${data.performance.failed}</p>
+
+<p>Average Time : ${data.performance.average_processing_time} sec</p>
+
+<hr>
+
+<h2>Alerts</h2>
+
+<p>${data.alerts.length ? data.alerts.join("<br>") : "No Alerts"}</p>
+
+<hr>
+
+<p>Last Updated : ${new Date().toLocaleTimeString()}</p>
+
+`;
+
+}
+
+loadDashboard();
+
+setInterval(loadDashboard,5000);
+
+</script>
+
+</body>
+
+</html>

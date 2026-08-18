@@ -1,3 +1,9 @@
+from app.queue.queue_manager import enqueue_task
+from fastapi import Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+
 from fastapi import FastAPI
 from fastapi import Depends
 
@@ -22,6 +28,16 @@ import time
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+templates = Jinja2Templates(
+    directory="app/templates"
+)
+
+app.mount(
+    "/static",
+    StaticFiles(directory="app/static"),
+    name="static"
+)
 
 
 @app.get("/")
@@ -60,7 +76,10 @@ def create_task(
     db.refresh(new_task)
     
     if task.delay == 0:
-        redis_client.rpush("task_queue", new_task.id)
+        enqueue_task(
+            new_task.id,
+            new_task.priority
+        )
 
     return {
         "task_id": new_task.id,
@@ -388,3 +407,14 @@ def dashboard(
         "alerts": alerts
 
     }
+    
+@app.get(
+    "/console",
+    response_class=HTMLResponse
+)
+def console(request: Request):
+
+    return templates.TemplateResponse(
+        request=request,
+        name="console.html"
+    )

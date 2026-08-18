@@ -67,7 +67,7 @@ def process_task(task_id: int):
             print(f"[Worker {WORKER_ID}] Simulating Crash...")
             os._exit(1)
 
-        time.sleep(5)
+        time.sleep(20)
 
         if task.payload.get("fail"):
 
@@ -207,7 +207,19 @@ while True:
 
     send_heartbeat()
 
-    task = redis_client.lpop("task_queue")
+    task = redis_client.lpop("high_priority_queue")
+
+    if not task:
+
+        task = redis_client.lpop(
+            "medium_priority_queue"
+        )
+
+    if not task:
+
+        task = redis_client.lpop(
+            "low_priority_queue"
+        )
 
     if task:
 
