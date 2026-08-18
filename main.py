@@ -158,6 +158,18 @@ def get_stats(
     # Queue Metrics
     queued_tasks = redis_client.llen("task_queue")
     dead_letter_tasks = redis_client.llen("dead_letter_queue")
+    
+    high_priority_tasks = redis_client.llen(
+        "high_priority_queue"
+    )
+
+    medium_priority_tasks = redis_client.llen(
+        "medium_priority_queue"
+    )
+
+    low_priority_tasks = redis_client.llen(
+        "low_priority_queue"
+    )
 
     # Worker Metrics
     worker_keys = redis_client.keys("worker:*")
@@ -227,7 +239,12 @@ def get_stats(
             "pending": pending_tasks,
             "processing": processing_tasks,
             "scheduled": scheduled_tasks,
-            "dead_letter": dead_letter_tasks
+            "dead_letter": dead_letter_tasks,
+            "priority_queues": {
+                "high": high_priority_tasks,
+                "medium": medium_priority_tasks,
+                "low": low_priority_tasks
+            }
         },
 
         "performance": {
@@ -238,6 +255,32 @@ def get_stats(
                 2
             )
         }
+    }
+    
+@app.get("/queues/priority")
+def get_priority_queues():
+
+    high_tasks = redis_client.llen(
+        "high_priority_queue"
+    )
+
+    medium_tasks = redis_client.llen(
+        "medium_priority_queue"
+    )
+
+    low_tasks = redis_client.llen(
+        "low_priority_queue"
+    )
+
+    dead_letter_tasks = redis_client.llen(
+        "dead_letter_queue"
+    )
+
+    return {
+        "high": high_tasks,
+        "medium": medium_tasks,
+        "low": low_tasks,
+        "dead_letter": dead_letter_tasks
     }
 
 @app.get("/dashboard")
@@ -253,6 +296,18 @@ def dashboard(
 
     dead_letter_tasks = redis_client.llen(
         "dead_letter_queue"
+    )
+    
+    high_priority_tasks = redis_client.llen(
+        "high_priority_queue"
+    )
+
+    medium_priority_tasks = redis_client.llen(
+        "medium_priority_queue"
+    )
+
+    low_priority_tasks = redis_client.llen(
+        "low_priority_queue"
     )
 
     # ------------------------
@@ -387,7 +442,13 @@ def dashboard(
 
             "scheduled": scheduled_tasks,
 
-            "dead_letter": dead_letter_tasks
+            "dead_letter": dead_letter_tasks,
+            
+            "priority_queues": {
+                "high": high_priority_tasks,
+                "medium": medium_priority_tasks,
+                "low": low_priority_tasks
+            }
 
         },
 

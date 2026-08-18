@@ -1,3 +1,4 @@
+from app.queue.queue_manager import enqueue_task
 import os
 import time
 import socket
@@ -124,9 +125,9 @@ def process_task(task_id: int):
 
             time.sleep(delay)
 
-            redis_client.rpush(
-                "task_queue",
-                task.id
+            enqueue_task(
+                task.id,
+                task.priority
             )
             
             redis_client.hset(

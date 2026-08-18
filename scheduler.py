@@ -1,3 +1,4 @@
+from app.queue.queue_manager import enqueue_task
 from datetime import datetime, UTC
 import time
 
@@ -30,9 +31,9 @@ def schedule_tasks():
 
             task.status = "PENDING"
 
-            redis_client.rpush(
-                "task_queue",
-                task.id
+            enqueue_task(
+                task.id,
+                task.priority
             )
 
         db.commit()
