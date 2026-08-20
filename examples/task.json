@@ -1,0 +1,9 @@
+{
+  "type": "demo",
+  "payload": {
+    "message": "Hello WorkerGrid",
+    "duration": 2
+  },
+  "priority": "HIGH",
+  "delay": 0
+}

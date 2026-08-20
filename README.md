@@ -1,402 +1,94 @@
-# 🚀 WorkerGrid
+# WorkerGrid v2.0 + v3.0
 
-> A distributed task processing system built with **FastAPI, Redis, PostgreSQL, and Docker**.
+WorkerGrid is a distributed task-processing system built with FastAPI, Redis, PostgreSQL and Python workers.
 
-WorkerGrid explores how modern backend systems execute long-running tasks asynchronously using a producer-consumer architecture with background workers, retries, dead letter queues, and monitoring APIs.
+## v2.0 completed scope
 
----
+- Priority queues: HIGH / MEDIUM / LOW
+- Delayed scheduling
+- Worker registry and heartbeats
+- Task-to-worker persistence
+- Retries and Dead Letter Queue
+- Recovery monitor
+- Task listing and detailed execution history
+- Client-oriented dashboard APIs
+- CORS-enabled React integration
 
-# 🎯 Why WorkerGrid?
+## v3.0 functional baseline
 
-Many real-world applications need to perform expensive operations without blocking user requests.
+- Workflow DAGs with dependency validation
+- Dependency-aware task release
+- Worker capabilities
+- Control-plane resource snapshot
+- Scaling recommendations
+- Manual task retry/cancel operations
+- Improved autonomous recovery
+- Expanded observability
 
-Examples include:
+The v3 control plane intentionally exposes **advisory scaling recommendations** rather than spawning local processes invisibly. Actual worker deployment/scaling remains an infrastructure concern (Docker/Kubernetes/cloud).
 
-* AI inference
-* Email delivery
-* Video processing
-* File uploads
-* Report generation
-* Notifications
-* Audio transcription
+## Start
 
-Instead of processing these tasks immediately, WorkerGrid demonstrates how they can be queued, processed in the background, retried automatically, and monitored.
+1. Start infrastructure:
 
----
-
-# ✨ Features
-
-## Task Processing
-
-* Create background tasks
-* Redis-backed task queue
-* Asynchronous worker processing
-* PostgreSQL persistence
-
-## Reliability
-
-* Automatic retries
-* Dead Letter Queue (DLQ)
-* Failure recovery
-* Task state tracking
-
-## Scalability
-
-* Multiple worker processes
-* Shared Redis queue
-* Horizontal task distribution
-
-## Monitoring
-
-* Worker heartbeats
-* Active worker monitoring
-* System metrics API
-
----
-
-# 🏗 Architecture
-
-```text
-                    ┌─────────────┐
-                    │   Client    │
-                    └──────┬──────┘
-                           │
-                           ▼
-                  ┌────────────────┐
-                  │     FastAPI    │
-                  └──┬──────┬───┬──┘
-                     │      │   │
-              ┌──────┘      │   └──────┐
-              ▼             ▼          ▼
-          ┌───────┐   ┌─────────┐  ┌───────┐
-          │ Tasks │   │ Workers │  │ Stats │
-          └───┬───┘   └─────────┘  └───────┘
-              │
-              ▼
-     ┌─────────────────┐
-     │   Redis Queue   │
-     └──┬──────┬───┬───┘
-        │      │   │
-        ▼      ▼   ▼
-    ┌──────┐ ┌──────┐ ┌──────┐
-    │  W1  │ │  W2  │ │  W3  │
-    └──┬───┘ └──┬───┘ └──┬───┘
-       └────────┼────────┘
-                │
-                ▼
-       ┌──────────────────┐
-       │    PostgreSQL    │
-       └──────────────────┘
+```powershell
+docker compose up -d
 ```
 
----
+2. Install Python dependencies:
 
-# 🔄 Task Lifecycle
-
-```text
-PENDING
-
-↓
-
-PROCESSING
-
-↓
-
-SUCCESS
+```powershell
+pip install -r requirements.txt
 ```
 
----
+3. Apply the database migration once:
 
-# ⚠ Failure Flow
-
-```text
-PENDING
-
-↓
-
-PROCESSING
-
-↓
-
-RETRY
-
-↓
-
-RETRY
-
-↓
-
-FAILED
-
-↓
-
-DEAD LETTER QUEUE
+```powershell
+docker exec -i workergrid_postgres psql -U workergrid -d workergrid < migrations/v3.sql
 ```
 
-# 🔁 Retry Strategy
+4. Start API:
 
-WorkerGrid automatically retries failed tasks using **Exponential Retry Backoff**.
-
-Retry Schedule
-
-```text
-Retry #1 → Wait 2 seconds
-
-Retry #2 → Wait 4 seconds
-
-Retry #3 → Move to Dead Letter Queue
-```
-
-This prevents retry storms and gives external services time to recover before another retry is attempted.
-
----
-
-# 🛠 Tech Stack
-
-| Component      | Technology |
-| -------------- | ---------- |
-| API            | FastAPI    |
-| Database       | PostgreSQL |
-| Queue          | Redis      |
-| ORM            | SQLAlchemy |
-| Infrastructure | Docker     |
-| Language       | Python     |
-
----
-
-# 📡 API Endpoints
-
-| Endpoint        | Description     |
-| --------------- | --------------- |
-| GET /           | Health check    |
-| POST /tasks     | Create a task   |
-| GET /tasks/{id} | Get task status |
-| GET /workers    | Active workers  |
-| GET /stats      | System metrics  |
-
----
-
-# 🚀 Example Workflow
-
-## Create Task
-
-```http
-POST /tasks
-```
-
-```json
-{
-  "type": "demo",
-  "payload": {
-    "message": "hello"
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "task_id": 1,
-  "status": "PENDING",
-  "queued": true
-}
-```
-
----
-
-## Processing Flow
-
-```text
-Client
-
-↓
-
-POST /tasks
-
-↓
-
-Redis Queue
-
-↓
-
-Background Worker
-
-↓
-
-PostgreSQL
-
-↓
-
-GET /tasks/{id}
-```
-
----
-
-# 📊 Monitoring
-
-## Worker Monitoring
-
-```http
-GET /workers
-```
-
-Returns active workers and heartbeat timestamps.
-
-## System Metrics
-
-```http
-GET /stats
-```
-
-Returns:
-
-* Queued tasks
-* Dead Letter Queue size
-* Active workers
-* Successful tasks
-* Failed tasks
-
----
-
-# 📁 Project Structure
-
-```text
-app/
-├── api/
-├── db/
-├── models/
-├── queue/
-├── workers/
-
-docker/
-tests/
-
-main.py
-worker.py
-```
-
----
-
-# ⚡ Quick Start
-
-## Start Redis and PostgreSQL
-
-```bash
-docker compose up
-```
-
-## Start FastAPI
-
-```bash
+```powershell
 python -m uvicorn main:app --reload
 ```
 
-## Start Worker Processes
+5. Start scheduler, recovery monitor and one or more workers in separate terminals:
 
-```bash
+```powershell
+python scheduler.py
+python recovery_monitor.py
 python worker.py
 ```
 
-Run multiple worker instances for parallel task execution.
+6. Frontend:
 
----
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-# 📈 Current Capabilities
+## Important payload controls for demos
 
-## Core
+`duration` controls demo processing duration in seconds.
 
-* FastAPI
-* PostgreSQL
-* Redis
-* Docker
+`fail: true` forces a failure and exercises retry/DLQ handling.
 
-## Processing
+`crash: true` simulates a worker crash for recovery testing.
 
-* Background workers
-* Multiple workers
-* Task queue
+## API
 
-## Reliability
-
-* Automatic retries
-* Exponential Retry Backoff
-* Dead Letter Queue (DLQ)
-* Failure recovery
-* Task state tracking
-
-## Monitoring
-
-* Worker heartbeats
-* Worker monitoring API
-* System metrics API
-
----
-
-# 🛣 Future Roadmap
-
-## WorkerGrid v1.1
-
-Completed
-
-- ✅ Priority Queue
-- ✅ Delayed Tasks
-- ✅ Exponential Retry Backoff
-
-Planned
-
-- Worker Registry
-- Task Cancellation
-- Enhanced Monitoring
-- Dashboard
-
-## WorkerGrid v2
-
-WorkerGrid will serve as reusable infrastructure for future applications, including VoiceNotes, enabling distributed transcription and summarization pipelines.
-
----
-
-# 📌 Status
-
-## WorkerGrid v1.0
-
-### ✅ Released
-
-Completed features:
-
-* Task Queue
-* Background Workers
-* Multiple Workers
-* Automatic Retries
-* Dead Letter Queue
-* Worker Heartbeats
-* Worker Monitoring API
-* System Metrics API
-
----
-
-# 👨‍💻 Project Goal
-
-WorkerGrid was built to explore the backend engineering concepts behind modern distributed task processing systems.
-
-The project focuses on asynchronous job execution, fault tolerance, worker coordination, and operational monitoring while providing a reusable foundation for future applications.
-
----
-
-# 📚 Engineering Concepts Demonstrated
-
-WorkerGrid explores several backend engineering concepts:
-
-- Producer–Consumer Architecture
-- Background Job Processing
-- Redis-based Task Queues
-- Asynchronous Processing
-- Worker Processes
-- Retry Mechanisms
-- Exponential Retry Backoff
-- Dead Letter Queue (DLQ)
-- Worker Heartbeats
-- Operational Monitoring
-
-
-⭐ If you found this project interesting, consider giving it a star.
+- `GET /health`
+- `POST /tasks`
+- `GET /tasks`
+- `GET /tasks/{id}`
+- `POST /tasks/{id}/retry`
+- `POST /tasks/{id}/cancel`
+- `GET /workers`
+- `GET /stats`
+- `GET /queues/priority`
+- `GET /dashboard`
+- `POST /workflows`
+- `GET /workflows/{workflow_id}`
+- `GET /control-plane`

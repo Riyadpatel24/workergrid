@@ -1,109 +1,112 @@
 import {
   Activity,
-  AlertTriangle, CheckCircle2,
-  ChevronRight,
-  Clock,
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
   Database,
-  Inbox,
-  Layers,
-  Radio,
-  RefreshCw, Search,
+  GitBranch,
+  Layers3,
+  RefreshCw,
+  Search,
   Server,
   Settings2,
-  Wifi, WifiOff,
-  XCircle
+  TriangleAlert,
+  Users,
+  Wifi,
+  WifiOff,
+  XCircle,
+  Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/* ============================================================================
-   WORKERGRID OPERATIONS CONSOLE
-   Frontend-only. Reads from the existing FastAPI backend. Never mutates
-   backend logic, models, or Redis/queue behavior. No fabricated data —
-   any metric the current API does not yet expose is shown as a pending
-   slot, not a fake number.
-   ============================================================================ */
-
-/* ----------------------------------------------------------------------------
-   1. API SERVICE LAYER
-   All network access is isolated here. UI components never call fetch()
-   directly. To wire up a new backend endpoint (e.g. the Issue #10 priority
-   queue endpoint), add one entry to ENDPOINTS and one method to `api`.
----------------------------------------------------------------------------- */
-
 const ENDPOINTS = {
   root: "/",
+  health: "/health",
+  tasks: "/tasks",
   task: (id) => `/tasks/${id}`,
+  retryTask: (id) => `/tasks/${id}/retry`,
+  cancelTask: (id) => `/tasks/${id}/cancel`,
   workers: "/workers",
   stats: "/stats",
   dashboard: "/dashboard",
-  // --- Reserved for Issue #10 (Priority Queue Manager). Not implemented
-  // backend-side yet. Wire this up the moment the endpoint ships; every
-  // component below already knows how to render a "pending" state until
-  // real data lands here.
   queues: "/queues/priority",
+  workflows: "/workflows",
+  workflow: (id) => `/workflows/${id}`,
+  controlPlane: "/control-plane",
 };
 
 function buildUrl(baseUrl, path) {
-  if (!baseUrl) return path;
-  return baseUrl.replace(/\/+$/, "") + path;
+  return baseUrl ? `${baseUrl.replace(/\/+$/, "")}${path}` : path;
 }
 
-async function request(baseUrl, path, { signal } = {}) {
-  const url = buildUrl(baseUrl, path);
-  const res = await fetch(url, { signal, headers: { Accept: "application/json" } });
-  if (!res.ok) {
-    const err = new Error(`${res.status} ${res.statusText}`);
-    err.status = res.status;
-    throw err;
+async function request(baseUrl, path, { signal, method = "GET", body } = {}) {
+  const response = await fetch(buildUrl(baseUrl, path), {
+    signal,
+    method,
+    headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const data = await response.json();
+      message = data.detail || message;
+    } catch { /* response was not JSON */ }
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
-  return res.json();
+  return response.json();
 }
 
 const api = {
-  getRoot: (baseUrl, opts) => request(baseUrl, ENDPOINTS.root, opts),
-  getWorkers: (baseUrl, opts) => request(baseUrl, ENDPOINTS.workers, opts),
-  getStats: (baseUrl, opts) => request(baseUrl, ENDPOINTS.stats, opts),
-  getDashboard: (baseUrl, opts) => request(baseUrl, ENDPOINTS.dashboard, opts),
-  getTask: (baseUrl, id, opts) => request(baseUrl, ENDPOINTS.task(id), opts),
-  // Future: priority queue depths (Issue #10). Fails soft — callers treat
-  // a thrown error here as "endpoint not deployed yet", not a system fault.
-  getQueues: (baseUrl, opts) => request(baseUrl, ENDPOINTS.queues, opts),
+  getRoot: (base, opts) => request(base, ENDPOINTS.root, opts),
+  getHealth: (base, opts) => request(base, ENDPOINTS.health, opts),
+  getTasks: (base, opts) => request(base, `${ENDPOINTS.tasks}?limit=20`, opts),
+  getTask: (base, id, opts) => request(base, ENDPOINTS.task(id), opts),
+  getWorkers: (base, opts) => request(base, ENDPOINTS.workers, opts),
+  getStats: (base, opts) => request(base, ENDPOINTS.stats, opts),
+  getDashboard: (base, opts) => request(base, ENDPOINTS.dashboard, opts),
+  getQueues: (base, opts) => request(base, ENDPOINTS.queues, opts),
+  getControlPlane: (base, opts) => request(base, ENDPOINTS.controlPlane, opts),
+  retryTask: (base, id) => request(base, ENDPOINTS.retryTask(id), { method: "POST" }),
+  cancelTask: (base, id) => request(base, ENDPOINTS.cancelTask(id), { method: "POST" }),
 };
 
-/* ----------------------------------------------------------------------------
-   2. DATA HOOKS
-   Polling + state, decoupled from rendering.
----------------------------------------------------------------------------- */
-
-function usePoll(fn, intervalMs, deps = []) {
+function usePoll(fn, intervalMs) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState(null);
   const controllerRef = useRef(null);
+  const fnRef = useRef(fn);
+
+  useEffect(() => {
+    fnRef.current = fn;
+  }, [fn]);
 
   const run = useCallback(async () => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     try {
-      const result = await fn({ signal: controller.signal });
+      const result = await fnRef.current({ signal: controller.signal });
       setData(result);
       setError(null);
       setUpdatedAt(new Date());
-    } catch (e) {
-      if (e.name !== "AbortError") setError(e);
+    } catch (error) {
+      if (error.name !== "AbortError") setError(error);
     } finally {
       setLoading(false);
     }
-  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     run();
-    if (!intervalMs) return;
-    const id = setInterval(run, intervalMs);
+    if (!intervalMs) return undefined;
+    const timer = setInterval(run, intervalMs);
     return () => {
-      clearInterval(id);
+      clearInterval(timer);
       controllerRef.current?.abort();
     };
   }, [run, intervalMs]);
@@ -111,371 +114,180 @@ function usePoll(fn, intervalMs, deps = []) {
   return { data, error, loading, updatedAt, refetch: run };
 }
 
-function useWorkerGridData(baseUrl) {
-  const health = usePoll((o) => api.getRoot(baseUrl, o), 15000, [baseUrl]);
-  const workers = usePoll((o) => api.getWorkers(baseUrl, o), 5000, [baseUrl]);
-  const stats = usePoll((o) => api.getStats(baseUrl, o), 8000, [baseUrl]);
-  const dashboard = usePoll((o) => api.getDashboard(baseUrl, o), 10000, [baseUrl]);
-  const queues = usePoll((o) => api.getQueues(baseUrl, o), 5000, [baseUrl]);
-  return { health, workers, stats, dashboard, queues };
+function useData(baseUrl) {
+  return {
+    health: usePoll((o) => api.getHealth(baseUrl, o), 5000, [baseUrl]),
+    workers: usePoll((o) => api.getWorkers(baseUrl, o), 1000, [baseUrl]),
+    stats: usePoll((o) => api.getStats(baseUrl, o), 3000, [baseUrl]),
+    dashboard: usePoll((o) => api.getDashboard(baseUrl, o), 3000, [baseUrl]),
+    queues: usePoll((o) => api.getQueues(baseUrl, o), 1500, [baseUrl]),
+    tasks: usePoll((o) => api.getTasks(baseUrl, { ...o, limit: 20 }), 3000, [baseUrl]),
+    control: usePoll((o) => api.getControlPlane(baseUrl, o), 5000, [baseUrl]),
+  };
 }
 
-/* ----------------------------------------------------------------------------
-   3. DERIVED / ALERT LOGIC
-   Alerts are computed client-side from real polled data only.
----------------------------------------------------------------------------- */
-
-function computeAlerts({ health, workers, stats, queues }) {
-  const alerts = [];
-
-  if (health.error) {
-    alerts.push({ level: "critical", text: "Cannot reach API root — backend may be down.", source: "GET /" });
-  }
-  if (workers.error) {
-    alerts.push({ level: "warning", text: "Worker registry unavailable.", source: "GET /workers" });
-  }
-  if (stats.error) {
-    alerts.push({ level: "warning", text: "Stats endpoint unavailable.", source: "GET /stats" });
-  }
-
-  const workerList = Array.isArray(workers.data) ? workers.data
-    : Array.isArray(workers.data?.workers) ? workers.data.workers : [];
-
-  const offline = workerList.filter((w) => classifyWorker(w) === "offline");
-  if (offline.length > 0) {
-    alerts.push({
-      level: "critical",
-      text: `${offline.length} worker${offline.length > 1 ? "s" : ""} offline / missed heartbeat.`,
-      source: "GET /workers",
-    });
-  }
-
-  const s = stats.data || {};
-  const dlqCount = numOrNull(s.dlq_count ?? s.dead_letter_count ?? s.dlq);
-  if (dlqCount !== null && dlqCount > 0) {
-    alerts.push({
-      level: "warning",
-      text: `${dlqCount} task${dlqCount > 1 ? "s" : ""} in the Dead Letter Queue.`,
-      source: "GET /stats",
-    });
-  }
-
-  const failed = numOrNull(s.failed_tasks ?? s.failed);
-  const successful = numOrNull(s.successful_tasks ?? s.successful);
-  if (failed !== null && successful !== null && failed + successful > 0) {
-    const rate = failed / (failed + successful);
-    if (rate > 0.2) {
-      alerts.push({
-        level: "critical",
-        text: `Failure rate at ${(rate * 100).toFixed(1)}% of completed tasks.`,
-        source: "GET /stats",
-      });
-    }
-  }
-
-  if (queues.error) {
-    alerts.push({
-      level: "info",
-      text: "Priority queue endpoint (Issue #10) not yet deployed — HIGH/MEDIUM/LOW depths pending.",
-      source: "GET /queues/priority",
-    });
-  }
-
-  return alerts;
+function formatDuration(seconds) {
+  if (seconds == null) return "—";
+  if (seconds < 1) return `${Math.round(seconds * 1000)} ms`;
+  if (seconds < 60) return `${Number(seconds).toFixed(2)} s`;
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
-function numOrNull(v) {
-  return typeof v === "number" && !Number.isNaN(v) ? v : null;
+function formatTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function classifyWorker(w) {
-  const rawStatus = String(w.status || "").toUpperCase();
-  if (rawStatus === "OFFLINE" || rawStatus === "DOWN" || rawStatus === "DEAD") return "offline";
-  if (w.current_task || rawStatus === "BUSY") return "busy";
-  if (rawStatus === "ONLINE" || rawStatus === "IDLE" || rawStatus === "READY") return "online";
-  // fall back to heartbeat staleness if provided
-  if (w.last_heartbeat) {
-    const age = Date.now() - new Date(w.last_heartbeat).getTime();
-    if (age > 60000) return "offline";
-  }
-  return "online";
+function timeAgo(value) {
+  if (!value) return "—";
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 2) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.floor(seconds / 60)}m ago`;
 }
 
-/* ----------------------------------------------------------------------------
-   4. PRESENTATION PRIMITIVES
----------------------------------------------------------------------------- */
-
-const STATUS_META = {
-  online: { label: "ONLINE", color: "var(--c-online)" },
-  busy: { label: "BUSY", color: "var(--c-busy)" },
-  offline: { label: "OFFLINE", color: "var(--c-critical)" },
-};
-
-function Badge({ tone = "muted", children }) {
-  return <span className={`badge badge-${tone}`}>{children}</span>;
+function workersFrom(data) {
+  return Array.isArray(data) ? data : Array.isArray(data?.workers) ? data.workers : [];
 }
 
-function Panel({ title, icon: Icon, right, children, className = "" }) {
+function statusTone(status) {
+  const value = String(status || "").toUpperCase();
+  if (value === "SUCCESS") return "success";
+  if (value === "FAILED" || value === "CANCELLED") return "danger";
+  if (value === "PROCESSING") return "active";
+  if (value === "WAITING" || value === "SCHEDULED" || value === "PENDING") return "warning";
+  return "neutral";
+}
+
+function IconStatus({ status }) {
+  const tone = statusTone(status);
+  if (tone === "success") return <CheckCircle2 size={15} />;
+  if (tone === "danger") return <XCircle size={15} />;
+  if (tone === "active") return <Zap size={15} />;
+  return <Clock3 size={15} />;
+}
+
+function Header({ baseUrl, setBaseUrl, health, refreshAll }) {
+  const [draft, setDraft] = useState(baseUrl);
+  const healthy = health.data?.status === "healthy";
   return (
-    <section className={`panel ${className}`}>
-      <header className="panel-head">
-        <div className="panel-title">
-          {Icon && <Icon size={14} strokeWidth={2} />}
-          <span>{title}</span>
+    <header className="topbar">
+      <div className="brand-wrap">
+        <div className="brand-mark"><Layers3 size={19} /></div>
+        <div>
+          <div className="brand-name">WORKERGRID</div>
+          <div className="brand-subtitle">TASK PROCESSING PLATFORM</div>
         </div>
-        {right}
-      </header>
-      <div className="panel-body">{children}</div>
+      </div>
+      <div className={`connection ${healthy ? "connection-good" : health.error ? "connection-bad" : "connection-wait"}`}>
+        {healthy ? <Wifi size={14} /> : health.error ? <WifiOff size={14} /> : <Activity size={14} />}
+        {healthy ? "CONNECTED" : health.error ? "UNREACHABLE" : "CONNECTING"}
+      </div>
+      <div className="api-control">
+        <Settings2 size={13} />
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => setBaseUrl(draft.trim())} onKeyDown={(e) => e.key === "Enter" && setBaseUrl(draft.trim())} placeholder="API URL (blank = same origin)" />
+        <button className="ghost-button" onClick={refreshAll} title="Refresh"><RefreshCw size={14} /></button>
+      </div>
+    </header>
+  );
+}
+
+function Hero({ dashboard, stats }) {
+  const system = dashboard.data?.system_status || (stats.error ? "CRITICAL" : "HEALTHY");
+  const tone = system === "HEALTHY" ? "success" : system === "WARNING" ? "warning" : "danger";
+  const copy = tone === "success" ? "Everything is operating normally." : tone === "warning" ? "The system is running, but some items need attention." : "The platform needs attention.";
+  return (
+    <section className={`hero-card ${tone}`}>
+      <div>
+        <div className="eyebrow">SYSTEM OVERVIEW</div>
+        <div className="hero-title"><IconStatus status={tone === "success" ? "SUCCESS" : tone === "warning" ? "WAITING" : "FAILED"} /> {system}</div>
+        <p>{copy}</p>
+      </div>
+      <div className="hero-meta">
+        <span>Last update</span>
+        <strong>{timeAgo(dashboard.updatedAt)}</strong>
+      </div>
     </section>
   );
 }
 
-function EmptyState({ label }) {
-  return <div className="empty-state">{label}</div>;
-}
-
-function timeAgo(date) {
-  if (!date) return "—";
-  const s = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (s < 2) return "just now";
-  if (s < 60) return `${s}s ago`;
-  return `${Math.floor(s / 60)}m ago`;
-}
-
-/* ----------------------------------------------------------------------------
-   5. SIGNATURE ELEMENT — GRID PULSE
-   A schematic of the real pipeline (FastAPI → Scheduler → priority queues
-   → Worker Pool → PostgreSQL). Pulse density along each queue lane reflects
-   real queue depth when the Issue #10 endpoint is live; otherwise lanes sit
-   idle with a single tracer so the topology still reads correctly.
----------------------------------------------------------------------------- */
-
-function GridPulse({ queueDepths, workerBusyCount, dlqCount }) {
-  const lanes = [
-    { key: "high", label: "HIGH", y: 40, color: "var(--c-high)" },
-    { key: "medium", label: "MEDIUM", y: 90, color: "var(--c-medium)" },
-    { key: "low", label: "LOW", y: 140, color: "var(--c-low)" },
-  ];
-
+function MetricCard({ label, value, note, tone = "neutral", icon: Icon }) {
   return (
-    <div className="gridpulse-wrap">
-      <svg viewBox="0 0 720 200" className="gridpulse-svg" role="img" aria-label="Task flow topology">
-        {/* lane rails */}
-        <text x="8" y="24" className="gp-node-label">FASTAPI</text>
-        <rect x="4" y="34" width="86" height="132" rx="3" className="gp-node-box" />
-        <text x="47" y="104" textAnchor="middle" className="gp-node-sub">scheduler.py</text>
-        <text x="47" y="120" textAnchor="middle" className="gp-node-sub-dim">SCHEDULED → PENDING</text>
-
-        {lanes.map((lane, i) => {
-          const depth = queueDepths?.[lane.key];
-          const known = typeof depth === "number";
-          return (
-            <g key={lane.key}>
-              <line x1="90" y1={lane.y} x2="520" y2={lane.y} className="gp-lane" style={{ stroke: lane.color }} />
-              <text x="96" y={lane.y - 8} className="gp-lane-label" style={{ fill: lane.color }}>
-                {lane.label}_PRIORITY_QUEUE
-              </text>
-              <text x="514" y={lane.y - 8} textAnchor="end" className="gp-lane-count">
-                {known ? depth : "···"}
-              </text>
-              {/* tracer pulse */}
-              <circle r="3.2" className="gp-pulse" style={{ fill: lane.color }}>
-                <animateMotion
-                  dur={known ? `${Math.max(1.1, 2.6 - depth * 0.12)}s` : "3.2s"}
-                  repeatCount="indefinite"
-                  path={`M90,${lane.y} L520,${lane.y}`}
-                  begin={`${i * 0.4}s`}
-                />
-              </circle>
-            </g>
-          );
-        })}
-
-        <rect x="524" y="34" width="96" height="132" rx="3" className="gp-node-box" />
-        <text x="572" y="24" textAnchor="middle" className="gp-node-label">WORKER POOL</text>
-        <text x="572" y="104" textAnchor="middle" className="gp-node-sub">
-          {typeof workerBusyCount === "number" ? `${workerBusyCount} busy` : "···"}
-        </text>
-        <text x="572" y="120" textAnchor="middle" className="gp-node-sub-dim">HIGH → MED → LOW</text>
-
-        <line x1="620" y1="100" x2="672" y2="100" className="gp-lane" style={{ stroke: "var(--c-border-bright)" }} />
-        <circle r="3.2" className="gp-pulse" style={{ fill: "var(--c-text-dim)" }}>
-          <animateMotion dur="1.4s" repeatCount="indefinite" path="M620,100 L672,100" />
-        </circle>
-        <text x="676" y="24" className="gp-node-label">POSTGRES</text>
-        <rect x="676" y="34" width="40" height="132" rx="3" className="gp-node-box" />
-        <Database x="686" y="90" width="20" height="20" color="var(--c-text-dim)" />
-
-        {/* DLQ branch */}
-        <line x1="572" y1="166" x2="572" y2="192" className="gp-lane-dlq" />
-        <text x="572" y="199" textAnchor="middle" className="gp-dlq-label">
-          DLQ {typeof dlqCount === "number" ? `· ${dlqCount}` : ""}
-        </text>
-      </svg>
+    <div className={`metric-card ${tone}`}>
+      <div className="metric-icon"><Icon size={17} /></div>
+      <div className="metric-value">{value ?? "—"}</div>
+      <div className="metric-label">{label}</div>
+      {note && <div className="metric-note">{note}</div>}
     </div>
   );
 }
 
-/* ----------------------------------------------------------------------------
-   6. CONNECTION / TOP BAR
----------------------------------------------------------------------------- */
-
-function ConnectionBar({ baseUrl, setBaseUrl, health, onRefreshAll }) {
-  const [draft, setDraft] = useState(baseUrl);
-  const isUp = !health.error && !!health.data;
-  const isLoading = health.loading;
-
+function Overview({ stats }) {
+  const s = stats.data || {};
+  const workers = s.workers || {};
+  const tasks = s.tasks || {};
   return (
-    <div className="connbar">
-      <div className="brand">
-        <Layers size={18} strokeWidth={2.2} />
-        <span className="brand-name">WORKERGRID</span>
-        <span className="brand-sub">OPERATIONS CONSOLE</span>
-      </div>
-
-      <div className="conn-status">
-        <span className={`pulse-dot ${isLoading ? "dim" : isUp ? "up" : "down"}`} />
-        {isLoading ? (
-          <span className="conn-text">CONNECTING…</span>
-        ) : isUp ? (
-          <span className="conn-text up">
-            <Wifi size={13} /> HEALTHY
-          </span>
-        ) : (
-          <span className="conn-text down">
-            <WifiOff size={13} /> UNREACHABLE
-          </span>
-        )}
-      </div>
-
-      <div className="conn-controls">
-        <Settings2 size={13} className="conn-icon" />
-        <input
-          className="conn-input"
-          placeholder="API base URL (blank = same origin)"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => setBaseUrl(draft.trim())}
-          onKeyDown={(e) => e.key === "Enter" && setBaseUrl(draft.trim())}
-          spellCheck={false}
-        />
-        <span className="conn-updated">synced {timeAgo(health.updatedAt)}</span>
-        <button className="icon-btn" onClick={onRefreshAll} title="Refresh all">
-          <RefreshCw size={14} />
-        </button>
-      </div>
+    <div className="metric-grid">
+      <MetricCard icon={Users} label="Workers available" value={workers.online ?? 0} note={`${workers.busy ?? 0} currently busy`} tone="success" />
+      <MetricCard icon={Zap} label="Tasks processing" value={tasks.processing ?? 0} note="being handled right now" tone="active" />
+      <MetricCard icon={Layers3} label="Tasks waiting" value={(tasks.queued ?? 0) + (tasks.pending ?? 0) + (tasks.scheduled ?? 0)} note={`${tasks.scheduled ?? 0} scheduled`} tone="warning" />
+      <MetricCard icon={CheckCircle2} label="Completed" value={tasks.successful ?? 0} note={`${tasks.failed ?? 0} failed`} tone="success" />
     </div>
   );
 }
 
-/* ----------------------------------------------------------------------------
-   7. SYSTEM HEALTH STRIP
----------------------------------------------------------------------------- */
-
-function SystemHealthStrip({ health, workers, stats }) {
-  const workerList = Array.isArray(workers.data) ? workers.data
-    : Array.isArray(workers.data?.workers) ? workers.data.workers : [];
-  const offlineCount = workerList.filter((w) => classifyWorker(w) === "offline").length;
-  const overall = health.error || offlineCount > 0 ? (health.error ? "critical" : "warning") : "healthy";
-
-  const items = [
-    {
-      label: "SYSTEM",
-      value: overall === "healthy" ? "HEALTHY" : overall === "warning" ? "WARNING" : "CRITICAL",
-      tone: overall,
-      icon: overall === "healthy" ? CheckCircle2 : overall === "warning" ? AlertTriangle : XCircle,
-    },
-    { label: "WORKERS REGISTERED", value: workerList.length || (workers.loading ? "···" : "0"), tone: "neutral", icon: Server },
-    {
-      label: "WORKERS OFFLINE",
-      value: workers.loading ? "···" : String(offlineCount),
-      tone: offlineCount > 0 ? "critical" : "neutral",
-      icon: XCircle,
-    },
-    {
-      label: "AVG PROCESSING TIME",
-      value: fmtDuration(numOrNull(stats.data?.average_processing_time ?? stats.data?.avg_processing_time)),
-      tone: "neutral",
-      icon: Clock,
-    },
-  ];
-
+function ActiveTasks({ workers, tasks }) {
+  const workerList = workersFrom(workers.data);
+  const active = workerList.filter((worker) => worker.current_task != null);
+  const activeTaskMap = new Map((tasks.data?.items || []).map((task) => [task.id, task]));
   return (
-    <div className="health-strip">
-      {items.map((it) => (
-        <div key={it.label} className={`health-chip tone-${it.tone}`}>
-          <it.icon size={14} />
-          <div>
-            <div className="health-chip-value">{it.value}</div>
-            <div className="health-chip-label">{it.label}</div>
-          </div>
+    <Panel title="WHAT IS HAPPENING NOW" icon={Activity} right={<span className="panel-badge">LIVE</span>}>
+      {active.length === 0 ? (
+        <Empty label="No tasks are currently being processed." />
+      ) : (
+        <div className="active-list">
+          {active.map((worker) => {
+            const task = activeTaskMap.get(worker.current_task);
+            return (
+              <div className="active-card" key={worker.worker_id}>
+                <div className="active-pulse" />
+                <div className="active-main">
+                  <div className="active-title">Task #{worker.current_task}</div>
+                  <div className="active-sub">{task?.type || "Task is being processed"}</div>
+                </div>
+                <div className="active-worker">
+                  <span>Assigned worker</span>
+                  <strong>#{worker.worker_id}</strong>
+                </div>
+                <div className="active-status">BUSY</div>
+              </div>
+            );
+          })}
         </div>
-      ))}
-    </div>
+      )}
+    </Panel>
   );
 }
-
-function fmtDuration(seconds) {
-  if (seconds === null) return "···";
-  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
-  if (seconds < 60) return `${seconds.toFixed(2)}s`;
-  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-}
-
-/* ----------------------------------------------------------------------------
-   8. WORKER MONITORING TABLE
----------------------------------------------------------------------------- */
 
 function WorkerTable({ workers }) {
-  const list = Array.isArray(workers.data) ? workers.data
-    : Array.isArray(workers.data?.workers) ? workers.data.workers : [];
-
+  const list = workersFrom(workers.data);
   return (
-    <Panel
-      title="WORKER MONITORING"
-      icon={Server}
-      right={<span className="panel-count">{list.length}</span>}
-    >
-      {workers.error ? (
-        <EmptyState label="Worker registry unreachable — GET /workers failed." />
-      ) : workers.loading && list.length === 0 ? (
-        <EmptyState label="Loading workers…" />
-      ) : list.length === 0 ? (
-        <EmptyState label="No workers currently registered." />
-      ) : (
-        <div className="table-scroll">
-          <table className="grid-table">
-            <thead>
-              <tr>
-                <th>WORKER ID</th>
-                <th>HOSTNAME</th>
-                <th>STATUS</th>
-                <th>CURRENT TASK</th>
-                <th>COMPLETED</th>
-                <th>FAILED</th>
-                <th>VERSION</th>
-              </tr>
-            </thead>
+    <Panel title="WORKERS" icon={Server} right={<span className="panel-badge">{list.length} registered</span>}>
+      {workers.error ? <Empty label="Worker information is temporarily unavailable." /> : list.length === 0 ? <Empty label="No workers are currently registered." /> : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>WORKER</th><th>STATUS</th><th>CURRENT TASK</th><th>COMPLETED</th><th>FAILED</th><th>CAPABILITIES</th></tr></thead>
             <tbody>
-              {list.map((w, i) => {
-                const cls = classifyWorker(w);
-                const meta = STATUS_META[cls];
+              {list.map((worker) => {
+                const active = worker.current_task != null;
                 return (
-                  <tr key={w.worker_id ?? w.id ?? i}>
-                    <td className="mono">{w.worker_id ?? w.id ?? "—"}</td>
-                    <td className="mono">{w.hostname ?? "—"}</td>
-                    <td>
-                      <span className="status-pill" style={{ "--dot": meta.color }}>
-                        <span className="status-dot" />
-                        {meta.label}
-                      </span>
-                    </td>
-                    <td className="mono dim">{w.current_task ?? "idle"}</td>
-                    <td className="mono">{w.completed_tasks ?? w.completed ?? "—"}</td>
-                    <td className={`mono ${(w.failed_tasks ?? w.failed) > 0 ? "num-bad" : ""}`}>
-                      {w.failed_tasks ?? w.failed ?? "—"}
-                    </td>
-                    <td className="mono dim">{w.version ?? w.worker_version ?? "—"}</td>
+                  <tr className={active ? "worker-active" : ""} key={worker.worker_id}>
+                    <td><strong className="mono">#{worker.worker_id}</strong><div className="subtle mono">{worker.hostname}</div></td>
+                    <td><StatusBadge status={worker.status} /></td>
+                    <td>{active ? <span className="task-link">Task #{worker.current_task}</span> : <span className="subtle">Idle</span>}</td>
+                    <td className="mono">{worker.completed_tasks ?? 0}</td>
+                    <td className={`mono ${worker.failed_tasks > 0 ? "danger-text" : ""}`}>{worker.failed_tasks ?? 0}</td>
+                    <td className="subtle">{(worker.capabilities || []).join(", ") || "general"}</td>
                   </tr>
                 );
               })}
@@ -487,103 +299,41 @@ function WorkerTable({ workers }) {
   );
 }
 
-/* ----------------------------------------------------------------------------
-   9. QUEUE MONITORING
----------------------------------------------------------------------------- */
-
-function QueueMonitor({ queues, stats }) {
-  const known = !queues.error && queues.data;
-  const depths = known
-    ? {
-        high: numOrNull(queues.data.high ?? queues.data.high_priority_queue),
-        medium: numOrNull(queues.data.medium ?? queues.data.medium_priority_queue),
-        low: numOrNull(queues.data.low ?? queues.data.low_priority_queue),
-      }
-    : {};
-  const dlq = numOrNull(
-    queues.data?.dlq ?? stats.data?.dlq_count ?? stats.data?.dead_letter_count
-  );
-
-  const cards = [
-    { key: "high", label: "HIGH_PRIORITY_QUEUE", value: depths.high, color: "var(--c-high)" },
-    { key: "medium", label: "MEDIUM_PRIORITY_QUEUE", value: depths.medium, color: "var(--c-medium)" },
-    { key: "low", label: "LOW_PRIORITY_QUEUE", value: depths.low, color: "var(--c-low)" },
-    { key: "dlq", label: "DEAD_LETTER_QUEUE", value: dlq, color: "var(--c-critical)" },
+function QueuePanel({ queues, stats }) {
+  const q = queues.data || stats.data?.priority_queues || {};
+  const items = [
+    ["High priority", q.high ?? 0, "high"],
+    ["Normal priority", q.medium ?? 0, "medium"],
+    ["Low priority", q.low ?? 0, "low"],
+    ["Needs attention", q.dead_letter ?? stats.data?.tasks?.dead_letter ?? 0, "danger"],
   ];
-
-  const maxVal = Math.max(1, ...cards.map((c) => c.value || 0));
-
   return (
-    <Panel
-      title="QUEUE MONITORING"
-      icon={Inbox}
-      right={!known && <Badge tone="pending">ISSUE #10 · PENDING</Badge>}
-    >
+    <Panel title="WORK WAITING TO BE PROCESSED" icon={Layers3}>
       <div className="queue-grid">
-        {cards.map((c) => (
-          <div key={c.key} className="queue-card">
-            <div className="queue-card-top">
-              <span className="queue-card-label" style={{ color: c.color }}>{c.label}</span>
-              <span className="mono queue-card-value">
-                {c.value === null || c.value === undefined ? "···" : c.value}
-              </span>
-            </div>
-            <div className="queue-bar-track">
-              <div
-                className="queue-bar-fill"
-                style={{
-                  width: c.value ? `${Math.min(100, (c.value / maxVal) * 100)}%` : "3%",
-                  background: c.color,
-                  opacity: c.value === null || c.value === undefined ? 0.25 : 1,
-                }}
-              />
-            </div>
+        {items.map(([label, value, tone]) => (
+          <div className={`queue-item ${tone}`} key={label}>
+            <div className="queue-label">{label}</div>
+            <div className="queue-value">{value}</div>
+            <div className="queue-caption">{tone === "danger" ? "tasks need attention" : "tasks waiting"}</div>
           </div>
         ))}
       </div>
-      {!known && (
-        <div className="queue-pending-note">
-          Waiting on the priority queue endpoint (Issue #10). This panel renders live the
-          moment <code className="mono">GET /queues/priority</code> ships.
-        </div>
-      )}
     </Panel>
   );
 }
 
-/* ----------------------------------------------------------------------------
-   10. TASK STATISTICS
----------------------------------------------------------------------------- */
-
-function TaskStatistics({ stats }) {
-  const s = stats.data || {};
-  const items = [
-    { label: "PENDING", value: s.pending_tasks ?? s.pending, tone: "neutral" },
-    { label: "PROCESSING", value: s.processing_tasks ?? s.processing, tone: "busy" },
-    { label: "SCHEDULED", value: s.scheduled_tasks ?? s.scheduled, tone: "neutral" },
-    { label: "SUCCESSFUL", value: s.successful_tasks ?? s.successful, tone: "online" },
-    { label: "FAILED", value: s.failed_tasks ?? s.failed, tone: "critical" },
-    {
-      label: "AVG PROCESSING TIME",
-      value: fmtDuration(numOrNull(s.average_processing_time ?? s.avg_processing_time)),
-      tone: "neutral",
-      raw: true,
-    },
-  ];
-
+function RecentActivity({ tasks, onSelect }) {
+  const items = tasks.data?.items || [];
   return (
-    <Panel title="TASK STATISTICS" icon={Activity}>
-      {stats.error ? (
-        <EmptyState label="Stats endpoint unreachable — GET /stats failed." />
-      ) : (
-        <div className="stat-grid">
-          {items.map((it) => (
-            <div key={it.label} className={`stat-cell tone-${it.tone}`}>
-              <div className="stat-value mono">
-                {it.raw ? it.value : (it.value ?? (stats.loading ? "···" : "—"))}
-              </div>
-              <div className="stat-label">{it.label}</div>
-            </div>
+    <Panel title="RECENT ACTIVITY" icon={Clock3}>
+      {tasks.error ? <Empty label="Recent task activity is unavailable." /> : items.length === 0 ? <Empty label="No task activity yet." /> : (
+        <div className="activity-list">
+          {items.slice(0, 10).map((task) => (
+            <button className="activity-row" key={task.id} onClick={() => onSelect(task.id)}>
+              <span className={`activity-icon ${statusTone(task.status)}`}><IconStatus status={task.status} /></span>
+              <span className="activity-main"><strong>Task #{task.id}</strong><span>{task.type}</span></span>
+              <span className="activity-meta"><strong>{task.status}</strong><span>{timeAgo(task.created_at)}</span></span>
+            </button>
           ))}
         </div>
       )}
@@ -591,319 +341,180 @@ function TaskStatistics({ stats }) {
   );
 }
 
-/* ----------------------------------------------------------------------------
-   11. ALERTS
----------------------------------------------------------------------------- */
-
-function AlertsPanel({ alerts }) {
-  return (
-    <Panel title="ALERTS" icon={AlertTriangle} right={<span className="panel-count">{alerts.length}</span>}>
-      {alerts.length === 0 ? (
-        <EmptyState label="No active alerts." />
-      ) : (
-        <ul className="alert-list">
-          {alerts.map((a, i) => (
-            <li key={i} className={`alert-row tone-${a.level}`}>
-              <span className="alert-dot" />
-              <div className="alert-body">
-                <div className="alert-text">{a.text}</div>
-                <div className="alert-source mono">{a.source}</div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Panel>
-  );
-}
-
-/* ----------------------------------------------------------------------------
-   12. TASK LOOKUP (GET /tasks/{task_id})
----------------------------------------------------------------------------- */
-
-function TaskLookup({ baseUrl }) {
-  const [taskId, setTaskId] = useState("");
+function TaskLookup({ baseUrl, selectedId, onSelected }) {
+  const [taskId, setTaskId] = useState(selectedId ? String(selectedId) : "");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [action, setAction] = useState(null);
 
-  const lookup = async () => {
-    if (!taskId.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
+  useEffect(() => {
+    if (selectedId) void lookupTask(selectedId);
+  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function lookupTask(id = taskId) {
+    if (!String(id).trim()) return;
+    setLoading(true); setError(null);
+    try { const data = await api.getTask(baseUrl, id); setResult(data); onSelected?.(data); }
+    catch (err) { setResult(null); setError(err); }
+    finally { setLoading(false); }
+  }
+
+  async function runAction(kind) {
+    if (!result) return;
+    setAction(kind);
     try {
-      const data = await api.getTask(baseUrl, taskId.trim());
+      const data = kind === "retry" ? await api.retryTask(baseUrl, result.id) : await api.cancelTask(baseUrl, result.id);
       setResult(data);
-    } catch (e) {
-      setError(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+      onSelected?.(data);
+    } catch (err) { setError(err); }
+    finally { setAction(null); }
+  }
 
   return (
-    <Panel title="TASK LOOKUP" icon={Search} className="task-lookup">
+    <Panel title="TASK DETAILS" icon={Search}>
       <div className="lookup-row">
-        <input
-          className="conn-input lookup-input"
-          placeholder="task_id"
-          value={taskId}
-          onChange={(e) => setTaskId(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && lookup()}
-          spellCheck={false}
-        />
-        <button className="icon-btn" onClick={lookup} title="Look up task">
-          <ChevronRight size={14} />
-        </button>
+        <input value={taskId} onChange={(e) => setTaskId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && lookupTask()} placeholder="Enter a task ID" />
+        <button className="primary-button" onClick={() => lookupTask()} disabled={loading}>{loading ? "…" : "View task"}</button>
       </div>
-      {loading && <div className="lookup-status">querying…</div>}
-      {error && <div className="lookup-status bad">GET /tasks/{taskId} → {error.message}</div>}
+      {error && <div className="error-box">{error.message}</div>}
       {result && (
-        <pre className="lookup-result mono">{JSON.stringify(result, null, 2)}</pre>
+        <div className="task-detail">
+          <div className="detail-header">
+            <div><div className="eyebrow">TASK</div><h3>#{result.id}</h3></div>
+            <StatusBadge status={result.status} />
+          </div>
+          <div className="detail-grid">
+            <Detail label="Type" value={result.type} />
+            <Detail label="Priority" value={result.priority} />
+            <Detail label="Worker" value={result.worker_id ? `#${result.worker_id}` : "Not assigned yet"} />
+            <Detail label="Processing time" value={formatDuration(result.processing_time)} />
+            <Detail label="Started" value={formatTime(result.started_at)} />
+            <Detail label="Completed" value={formatTime(result.completed_at)} />
+          </div>
+          <div className="detail-actions">
+            {(result.status === "FAILED" || result.status === "SUCCESS") && <button className="secondary-button" onClick={() => runAction("retry")} disabled={!!action}>{action === "retry" ? "Retrying…" : "Retry task"}</button>}
+            {!['SUCCESS', 'FAILED', 'CANCELLED'].includes(result.status) && <button className="danger-button" onClick={() => runAction("cancel")} disabled={!!action}>{action === "cancel" ? "Cancelling…" : "Cancel task"}</button>}
+          </div>
+          <details className="technical-details">
+            <summary>Technical details</summary>
+            <pre>{JSON.stringify(result, null, 2)}</pre>
+          </details>
+        </div>
       )}
     </Panel>
   );
 }
 
-/* ----------------------------------------------------------------------------
-   13. ROOT APP
----------------------------------------------------------------------------- */
+function ControlPlane({ control }) {
+  const resources = control.data?.resources || {};
+  const scaling = control.data?.scaling || {};
+  return (
+    <Panel title="ADVANCED SYSTEM DETAILS" icon={Settings2}>
+      {control.error ? <Empty label="Control-plane metrics are unavailable." /> : (
+        <div className="advanced-grid">
+          <Detail label="CPU usage" value={resources.cpu_percent == null ? "Unavailable" : `${resources.cpu_percent}%`} />
+          <Detail label="Memory usage" value={resources.memory_percent == null ? "Unavailable" : `${resources.memory_percent}%`} />
+          <Detail label="Workers online" value={resources.workers_online ?? "—"} />
+          <Detail label="Workers busy" value={resources.workers_busy ?? "—"} />
+          <Detail label="Waiting work" value={resources.queue_waiting ?? "—"} />
+          <Detail label="Recommended workers" value={scaling.recommended_workers ?? "—"} />
+          <Detail label="Scaling mode" value={scaling.mode || "—"} />
+        </div>
+      )}
+      <div className="advanced-note">Scaling recommendations are advisory. Worker deployment remains an infrastructure responsibility.</div>
+    </Panel>
+  );
+}
+
+function Alerts({ dashboard }) {
+  const alerts = dashboard.data?.alerts || [];
+  return (
+    <Panel title="NEEDS ATTENTION" icon={TriangleAlert} right={<span className="panel-badge">{alerts.length}</span>}>
+      {alerts.length === 0 ? <div className="all-good"><CheckCircle2 size={16} /> No active issues.</div> : (
+        <div className="alert-list">{alerts.map((alert, index) => <div className={`alert ${alert.level}`} key={`${alert.message}-${index}`}><AlertTriangle size={15} /><span>{alert.message}</span></div>)}</div>
+      )}
+    </Panel>
+  );
+}
+
+function WorkflowSummary({ dashboard }) {
+  const active = dashboard.data?.active_tasks || [];
+  const workflows = active.filter((task) => task.workflow_id);
+  return (
+    <Panel title="WORKFLOW ACTIVITY" icon={GitBranch} right={<span className="panel-badge">v3</span>}>
+      {workflows.length === 0 ? <Empty label="No workflow steps are currently processing." /> : workflows.map((task) => <div className="workflow-row" key={task.id}><strong>{task.workflow_key || `Task #${task.id}`}</strong><span>{task.workflow_id}</span><StatusBadge status={task.status} /></div>)}
+    </Panel>
+  );
+}
+
+function StatusBadge({ status }) {
+  const tone = statusTone(status);
+  return <span className={`status-badge ${tone}`}><span />{status || "UNKNOWN"}</span>;
+}
+
+function Detail({ label, value }) {
+  return <div className="detail"><span>{label}</span><strong>{value ?? "—"}</strong></div>;
+}
+
+function Empty({ label }) { return <div className="empty">{label}</div>; }
+
+function Panel({ title, icon: Icon, right, children }) {
+  return <section className="panel"><div className="panel-head"><div className="panel-title">{Icon && <Icon size={15} />}<span>{title}</span></div>{right}</div><div className="panel-body">{children}</div></section>;
+}
 
 export default function App() {
   const [baseUrl, setBaseUrl] = useState("");
-  const { health, workers, stats, dashboard, queues } = useWorkerGridData(baseUrl);
-
-  const alerts = computeAlerts({ health, workers, stats, queues });
-
-  const workerList = Array.isArray(workers.data) ? workers.data
-    : Array.isArray(workers.data?.workers) ? workers.data.workers : [];
-  const busyCount = workerList.filter((w) => classifyWorker(w) === "busy").length;
-
-  const queueDepths = !queues.error && queues.data
-    ? {
-        high: numOrNull(queues.data.high ?? queues.data.high_priority_queue),
-        medium: numOrNull(queues.data.medium ?? queues.data.medium_priority_queue),
-        low: numOrNull(queues.data.low ?? queues.data.low_priority_queue),
-      }
-    : {};
-  const dlqCount = numOrNull(
-    queues.data?.dlq ?? stats.data?.dlq_count ?? stats.data?.dead_letter_count
-  );
-
-  const refreshAll = () => {
-    health.refetch(); workers.refetch(); stats.refetch(); dashboard.refetch(); queues.refetch();
-  };
+  const [selectedTask, setSelectedTask] = useState(null);
+  const data = useData(baseUrl);
+  const refreshAll = () => Object.values(data).forEach((item) => item.refetch());
+  const stats = data.stats.data || {};
 
   return (
-    <div className="wg-root">
-      <style>{CSS}</style>
-
-      <ConnectionBar baseUrl={baseUrl} setBaseUrl={setBaseUrl} health={health} onRefreshAll={refreshAll} />
-      <SystemHealthStrip health={health} workers={workers} stats={stats} />
-
-      <Panel title="GRID PULSE — TASK FLOW" icon={Radio} className="gridpulse-panel">
-        <GridPulse queueDepths={queueDepths} workerBusyCount={busyCount} dlqCount={dlqCount} />
-      </Panel>
-
-      <div className="wg-grid">
-        <div className="wg-col-main">
-          <WorkerTable workers={workers} />
-          <QueueMonitor queues={queues} stats={stats} />
-          <TaskStatistics stats={stats} />
+    <div className="app-shell">
+      <Header baseUrl={baseUrl} setBaseUrl={setBaseUrl} health={data.health} refreshAll={refreshAll} />
+      <main>
+        <Hero dashboard={data.dashboard} stats={data.stats} />
+        <Overview stats={data.stats} />
+        <div className="two-column">
+          <div className="main-column">
+            <ActiveTasks workers={data.workers} tasks={data.tasks} />
+            <RecentActivity tasks={data.tasks} onSelect={(id) => setSelectedTask(id)} />
+            <WorkerTable workers={data.workers} />
+            <QueuePanel queues={data.queues} stats={data.stats} />
+            <ControlPlane control={data.control} />
+          </div>
+          <aside className="side-column">
+            <Alerts dashboard={data.dashboard} />
+            <TaskLookup key={selectedTask ?? "lookup"} baseUrl={baseUrl} selectedId={selectedTask} onSelected={setSelectedTask} />
+            <WorkflowSummary dashboard={data.dashboard} />
+            <Panel title="PERFORMANCE" icon={Database}>
+              <div className="advanced-grid">
+                <Detail label="Successful" value={stats.performance?.successful ?? 0} />
+                <Detail label="Failed" value={stats.performance?.failed ?? 0} />
+                <Detail label="Average processing" value={formatDuration(stats.performance?.average_processing_time)} />
+                <Detail label="Workers busy" value={stats.workers?.busy ?? 0} />
+              </div>
+            </Panel>
+          </aside>
         </div>
-        <div className="wg-col-side">
-          <AlertsPanel alerts={alerts} />
-          <TaskLookup baseUrl={baseUrl} />
-        </div>
-      </div>
-
-      <footer className="wg-footer mono">
-        WorkerGrid v2.0-dev · scheduler.py + priority queue manager in progress · frontend build only
-      </footer>
+      </main>
+      <footer>WorkerGrid v3.0 · distributed task processing · client console + control plane</footer>
     </div>
   );
 }
 
-/* ----------------------------------------------------------------------------
-   14. STYLES
----------------------------------------------------------------------------- */
-
 const CSS = `
-:root {
-  --c-bg: #0A0D12;
-  --c-panel: #10141B;
-  --c-panel-alt: #0D1117;
-  --c-border: #1D232E;
-  --c-border-bright: #2B3444;
-  --c-text: #DDE3EA;
-  --c-text-dim: #6B7684;
-  --c-online: #34D399;
-  --c-busy: #38BDF8;
-  --c-critical: #F87171;
-  --c-warning: #FBBF24;
-  --c-high: #FB7185;
-  --c-medium: #FBBF24;
-  --c-low: #60A5FA;
-  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  --sans: Inter, ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
-}
-* { box-sizing: border-box; }
-.wg-root {
-  background: var(--c-bg);
-  color: var(--c-text);
-  font-family: var(--sans);
-  min-height: 100vh;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  background-image:
-    linear-gradient(var(--c-border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--c-border) 1px, transparent 1px);
-  background-size: 32px 32px;
-  background-position: -1px -1px;
-  background-attachment: local;
-}
-.mono { font-family: var(--mono); }
-.dim { color: var(--c-text-dim); }
-
-/* connection bar */
-.connbar {
-  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
-  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 6px;
-  padding: 10px 16px;
-}
-.brand { display: flex; align-items: center; gap: 8px; color: var(--c-text); }
-.brand-name { font-family: var(--mono); font-weight: 700; letter-spacing: 1.5px; font-size: 14px; }
-.brand-sub { font-size: 10px; letter-spacing: 1.5px; color: var(--c-text-dim); border-left: 1px solid var(--c-border-bright); padding-left: 8px; }
-.conn-status { display: flex; align-items: center; gap: 8px; }
-.pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-text-dim); }
-.pulse-dot.up { background: var(--c-online); box-shadow: 0 0 0 3px rgba(52,211,153,0.15); animation: breathe 2.4s ease-in-out infinite; }
-.pulse-dot.down { background: var(--c-critical); box-shadow: 0 0 0 3px rgba(248,113,113,0.15); }
-.pulse-dot.dim { background: var(--c-text-dim); }
-@keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
-.conn-text { font-family: var(--mono); font-size: 11px; letter-spacing: 1px; display: flex; align-items: center; gap: 5px; color: var(--c-text-dim); }
-.conn-text.up { color: var(--c-online); }
-.conn-text.down { color: var(--c-critical); }
-.conn-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 1; min-width: 240px; }
-.conn-icon { color: var(--c-text-dim); flex-shrink: 0; }
-.conn-input {
-  flex: 1; min-width: 120px; background: var(--c-panel-alt); border: 1px solid var(--c-border-bright);
-  color: var(--c-text); font-family: var(--mono); font-size: 12px; padding: 6px 10px; border-radius: 4px;
-}
-.conn-input:focus { outline: none; border-color: var(--c-busy); }
-.conn-updated { font-size: 10px; color: var(--c-text-dim); white-space: nowrap; font-family: var(--mono); }
-.icon-btn {
-  background: var(--c-panel-alt); border: 1px solid var(--c-border-bright); color: var(--c-text);
-  padding: 6px 8px; border-radius: 4px; cursor: pointer; display: flex; align-items: center;
-}
-.icon-btn:hover { border-color: var(--c-busy); color: var(--c-busy); }
-.icon-btn:focus-visible { outline: 2px solid var(--c-busy); outline-offset: 1px; }
-
-/* health strip */
-.health-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-.health-chip {
-  background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 6px;
-  padding: 10px 12px; display: flex; align-items: center; gap: 10px;
-  border-left: 3px solid var(--c-border-bright);
-}
-.health-chip.tone-healthy { border-left-color: var(--c-online); color: var(--c-online); }
-.health-chip.tone-warning { border-left-color: var(--c-warning); color: var(--c-warning); }
-.health-chip.tone-critical { border-left-color: var(--c-critical); color: var(--c-critical); }
-.health-chip.tone-neutral { border-left-color: var(--c-border-bright); color: var(--c-text); }
-.health-chip-value { font-family: var(--mono); font-size: 15px; font-weight: 700; }
-.health-chip-label { font-size: 10px; letter-spacing: 1px; color: var(--c-text-dim); margin-top: 2px; }
-
-/* panels */
-.panel { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 6px; overflow: hidden; }
-.panel-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 10px 14px; border-bottom: 1px solid var(--c-border); background: var(--c-panel-alt);
-}
-.panel-title { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: 1.5px; color: var(--c-text-dim); font-weight: 600; }
-.panel-body { padding: 14px; }
-.panel-count { font-family: var(--mono); font-size: 11px; color: var(--c-text-dim); }
-.empty-state { color: var(--c-text-dim); font-size: 12px; font-family: var(--mono); padding: 18px 4px; text-align: center; border: 1px dashed var(--c-border-bright); border-radius: 4px; }
-
-.badge { font-family: var(--mono); font-size: 9px; letter-spacing: 1px; padding: 3px 7px; border-radius: 3px; border: 1px solid; }
-.badge-pending { color: var(--c-warning); border-color: var(--c-warning); background: rgba(251,191,36,0.08); }
-
-/* grid pulse */
-.gridpulse-panel .panel-body { padding: 6px 10px 10px; }
-.gridpulse-wrap { width: 100%; overflow-x: auto; }
-.gridpulse-svg { width: 100%; min-width: 620px; height: auto; display: block; }
-.gp-node-box { fill: var(--c-panel-alt); stroke: var(--c-border-bright); stroke-width: 1; }
-.gp-node-label { fill: var(--c-text-dim); font-family: var(--mono); font-size: 9px; letter-spacing: 1px; }
-.gp-node-sub { fill: var(--c-text); font-family: var(--mono); font-size: 10px; }
-.gp-node-sub-dim { fill: var(--c-text-dim); font-family: var(--mono); font-size: 8px; }
-.gp-lane { stroke-width: 1.5; opacity: 0.55; }
-.gp-lane-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.5px; }
-.gp-lane-count { fill: var(--c-text-dim); font-family: var(--mono); font-size: 10px; }
-.gp-lane-dlq { stroke: var(--c-critical); stroke-width: 1.5; stroke-dasharray: 3 2; opacity: 0.6; }
-.gp-dlq-label { fill: var(--c-critical); font-family: var(--mono); font-size: 8px; letter-spacing: 0.5px; }
-@media (prefers-reduced-motion: reduce) { .gp-pulse animateMotion, .pulse-dot.up { animation: none !important; } }
-
-/* layout grid */
-.wg-grid { display: grid; grid-template-columns: 2.1fr 1fr; gap: 14px; align-items: start; }
-.wg-col-main, .wg-col-side { display: flex; flex-direction: column; gap: 14px; }
-@media (max-width: 920px) { .wg-grid { grid-template-columns: 1fr; } }
-
-/* worker table */
-.table-scroll { overflow-x: auto; }
-.grid-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.grid-table th {
-  text-align: left; font-family: var(--mono); font-size: 9px; letter-spacing: 1px; color: var(--c-text-dim);
-  padding: 6px 10px; border-bottom: 1px solid var(--c-border-bright); white-space: nowrap;
-}
-.grid-table td { padding: 8px 10px; border-bottom: 1px solid var(--c-border); white-space: nowrap; }
-.grid-table tbody tr:hover { background: var(--c-panel-alt); }
-.num-bad { color: var(--c-critical); }
-.status-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--dot); }
-.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 6px var(--dot); }
-
-/* queue monitor */
-.queue-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-.queue-card { background: var(--c-panel-alt); border: 1px solid var(--c-border-bright); border-radius: 5px; padding: 10px; }
-.queue-card-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; gap: 6px; }
-.queue-card-label { font-size: 9px; letter-spacing: 0.5px; font-family: var(--mono); }
-.queue-card-value { font-size: 16px; font-weight: 700; }
-.queue-bar-track { height: 5px; background: var(--c-border); border-radius: 3px; overflow: hidden; }
-.queue-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
-.queue-pending-note { margin-top: 10px; font-size: 11px; color: var(--c-text-dim); font-family: var(--mono); line-height: 1.6; }
-.queue-pending-note code { color: var(--c-warning); }
-
-/* task stats */
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
-.stat-cell { background: var(--c-panel-alt); border-left: 3px solid var(--c-border-bright); border-radius: 4px; padding: 10px 12px; }
-.stat-cell.tone-busy { border-left-color: var(--c-busy); }
-.stat-cell.tone-online { border-left-color: var(--c-online); }
-.stat-cell.tone-critical { border-left-color: var(--c-critical); }
-.stat-value { font-size: 18px; font-weight: 700; }
-.stat-label { font-size: 9px; letter-spacing: 1px; color: var(--c-text-dim); margin-top: 4px; }
-
-/* alerts */
-.alert-list { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; }
-.alert-row { display: flex; gap: 9px; padding: 8px 10px; background: var(--c-panel-alt); border-radius: 4px; border-left: 3px solid var(--c-border-bright); }
-.alert-row.tone-critical { border-left-color: var(--c-critical); }
-.alert-row.tone-warning { border-left-color: var(--c-warning); }
-.alert-row.tone-info { border-left-color: var(--c-busy); }
-.alert-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-border-bright); margin-top: 5px; flex-shrink: 0; }
-.tone-critical .alert-dot { background: var(--c-critical); }
-.tone-warning .alert-dot { background: var(--c-warning); }
-.tone-info .alert-dot { background: var(--c-busy); }
-.alert-text { font-size: 12px; line-height: 1.4; }
-.alert-source { font-size: 9px; color: var(--c-text-dim); margin-top: 3px; }
-
-/* task lookup */
-.lookup-row { display: flex; gap: 8px; }
-.lookup-input { flex: 1; }
-.lookup-status { font-family: var(--mono); font-size: 11px; color: var(--c-text-dim); margin-top: 8px; }
-.lookup-status.bad { color: var(--c-critical); }
-.lookup-result {
-  margin-top: 10px; background: var(--c-panel-alt); border: 1px solid var(--c-border-bright); border-radius: 4px;
-  padding: 10px; font-size: 11px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word;
-}
-
-.wg-footer { text-align: center; font-size: 10px; color: var(--c-text-dim); letter-spacing: 0.5px; padding: 8px 0 2px; }
+:root{--bg:#070a0f;--panel:#0d1219;--panel2:#101722;--border:#202a36;--border2:#2d3a4a;--text:#e6edf5;--muted:#8190a0;--green:#34d399;--blue:#38bdf8;--yellow:#fbbf24;--red:#f87171;--purple:#a78bfa;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;--sans:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+*{box-sizing:border-box}.app-shell{min-height:100vh;background:radial-gradient(circle at 50% -20%,#162232 0,#070a0f 42%);color:var(--text);font-family:var(--sans);padding:18px;line-height:1.4}.app-shell main{max-width:1400px;margin:auto}.topbar{max-width:1400px;margin:0 auto 16px;display:flex;align-items:center;gap:18px;padding:11px 14px;background:rgba(13,18,25,.94);border:1px solid var(--border);border-radius:8px;position:sticky;top:10px;z-index:10;backdrop-filter:blur(12px)}.brand-wrap{display:flex;align-items:center;gap:10px}.brand-mark{width:34px;height:34px;border:1px solid var(--border2);display:grid;place-items:center;border-radius:6px;color:var(--blue)}.brand-name{font:700 14px var(--mono);letter-spacing:1.5px}.brand-subtitle{font-size:9px;color:var(--muted);letter-spacing:1.3px}.connection{display:flex;align-items:center;gap:6px;font:600 10px var(--mono);padding:6px 9px;border:1px solid var(--border);border-radius:4px}.connection-good{color:var(--green)}.connection-bad{color:var(--red)}.connection-wait{color:var(--yellow)}.api-control{display:flex;align-items:center;gap:7px;margin-left:auto;min-width:320px;flex:1;max-width:580px;color:var(--muted)}.api-control input,.lookup-row input{flex:1;min-width:0;background:#080c11;color:var(--text);border:1px solid var(--border2);border-radius:4px;padding:8px 10px;font:11px var(--mono)}button{border:0}.ghost-button,.primary-button,.secondary-button,.danger-button{border-radius:4px;padding:8px 11px;font-size:11px}.ghost-button{background:#0a0f15;color:var(--text);border:1px solid var(--border2)}.primary-button{background:var(--blue);color:#041018;font-weight:700}.secondary-button{background:#111b25;color:var(--text);border:1px solid var(--border2)}.danger-button{background:transparent;color:var(--red);border:1px solid rgba(248,113,113,.45)}.hero-card{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:22px;border:1px solid var(--border);border-left:4px solid var(--green);background:linear-gradient(90deg,#0f171f,#0c1118);border-radius:8px}.hero-card.warning{border-left-color:var(--yellow)}.hero-card.danger{border-left-color:var(--red)}.eyebrow{font:600 9px var(--mono);letter-spacing:1.5px;color:var(--muted);margin-bottom:5px}.hero-title{display:flex;align-items:center;gap:8px;font:700 22px var(--mono)}.hero-card.success .hero-title{color:var(--green)}.hero-card.warning .hero-title{color:var(--yellow)}.hero-card.danger .hero-title{color:var(--red)}.hero-card p{margin:6px 0 0;color:var(--muted);font-size:13px}.hero-meta{font:10px var(--mono);color:var(--muted);text-align:right}.hero-meta strong{display:block;color:var(--text);margin-top:3px}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.metric-card{padding:16px;background:var(--panel);border:1px solid var(--border);border-radius:7px;min-height:126px;border-top:2px solid var(--border2)}.metric-card.success{border-top-color:var(--green)}.metric-card.active{border-top-color:var(--blue)}.metric-card.warning{border-top-color:var(--yellow)}.metric-icon{color:var(--muted)}.metric-value{font:700 27px var(--mono);margin-top:8px}.metric-label{font-size:11px;color:var(--text);font-weight:600}.metric-note{font-size:10px;color:var(--muted);margin-top:3px}.two-column{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:12px}.main-column,.side-column{display:flex;flex-direction:column;gap:12px}.panel{background:rgba(13,18,25,.96);border:1px solid var(--border);border-radius:7px;overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid var(--border);background:#0b1016}.panel-title{display:flex;align-items:center;gap:7px;color:var(--muted);font:600 10px var(--mono);letter-spacing:1.2px}.panel-badge{font:9px var(--mono);color:var(--blue);border:1px solid rgba(56,189,248,.25);padding:3px 6px;border-radius:3px}.panel-body{padding:13px}.active-list{display:flex;flex-direction:column;gap:8px}.active-card{display:grid;grid-template-columns:8px 1fr auto auto;align-items:center;gap:12px;padding:13px;background:#0b1118;border:1px solid rgba(56,189,248,.22);border-radius:5px;box-shadow:inset 3px 0 var(--blue)}.active-pulse{width:7px;height:7px;background:var(--blue);border-radius:50%;box-shadow:0 0 0 5px rgba(56,189,248,.08);animation:pulse 1.4s infinite}.active-title{font:700 13px var(--mono)}.active-sub{font-size:11px;color:var(--muted)}.active-worker span{display:block;color:var(--muted);font-size:9px}.active-worker strong{font:600 11px var(--mono)}.active-status{color:var(--blue);font:700 9px var(--mono)}@keyframes pulse{50%{opacity:.35;transform:scale(.7)}}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:11px}th{text-align:left;color:var(--muted);font:600 9px var(--mono);letter-spacing:1px;padding:8px;border-bottom:1px solid var(--border);white-space:nowrap}td{padding:10px 8px;border-bottom:1px solid #18202a;white-space:nowrap}tbody tr:hover{background:#0f161e}.worker-active{background:rgba(56,189,248,.06);box-shadow:inset 3px 0 var(--blue)}.mono{font-family:var(--mono)}.subtle{color:var(--muted);font-size:9px}.task-link{color:var(--blue);font:600 10px var(--mono)}.danger-text{color:var(--red)}.status-badge{display:inline-flex;align-items:center;gap:5px;font:600 9px var(--mono);letter-spacing:.6px}.status-badge span{width:6px;height:6px;border-radius:50%;background:var(--muted)}.status-badge.success{color:var(--green)}.status-badge.success span{background:var(--green)}.status-badge.active{color:var(--blue)}.status-badge.active span{background:var(--blue)}.status-badge.warning{color:var(--yellow)}.status-badge.warning span{background:var(--yellow)}.status-badge.danger{color:var(--red)}.status-badge.danger span{background:var(--red)}.queue-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.queue-item{padding:12px;background:#0b1118;border:1px solid var(--border);border-radius:5px}.queue-item.high{border-top:2px solid #fb7185}.queue-item.medium{border-top:2px solid var(--yellow)}.queue-item.low{border-top:2px solid #60a5fa}.queue-item.danger{border-top:2px solid var(--red)}.queue-label{font-size:10px;color:var(--muted)}.queue-value{font:700 22px var(--mono);margin-top:4px}.queue-caption{font-size:9px;color:var(--muted)}.activity-list{display:flex;flex-direction:column}.activity-row{display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:9px;text-align:left;background:transparent;color:var(--text);padding:9px 3px;border-bottom:1px solid #18202a}.activity-row:hover{background:#0f161e}.activity-icon{width:27px;height:27px;display:grid;place-items:center;border-radius:4px}.activity-icon.success{color:var(--green);background:rgba(52,211,153,.08)}.activity-icon.active{color:var(--blue);background:rgba(56,189,248,.08)}.activity-icon.warning{color:var(--yellow);background:rgba(251,191,36,.08)}.activity-icon.danger{color:var(--red);background:rgba(248,113,113,.08)}.activity-main span,.activity-meta span{display:block;color:var(--muted);font-size:9px}.activity-main strong,.activity-meta strong{font:600 10px var(--mono)}.activity-meta{text-align:right}.lookup-row{display:flex;gap:7px}.error-box{margin-top:8px;padding:8px;background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.2);color:var(--red);font:10px var(--mono)}.task-detail{margin-top:12px;border:1px solid var(--border);background:#0a1016;border-radius:5px;padding:12px}.detail-header{display:flex;justify-content:space-between;align-items:center}.detail-header h3{margin:0;font:700 20px var(--mono)}.detail-grid,.advanced-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:12px}.detail{padding:8px;background:#0e151d;border:1px solid #18222d;border-radius:4px}.detail span{display:block;color:var(--muted);font-size:9px}.detail strong{display:block;margin-top:3px;font:600 10px var(--mono);overflow-wrap:anywhere}.detail-actions{display:flex;gap:7px;margin-top:10px}.technical-details{margin-top:10px;color:var(--muted);font-size:10px}.technical-details summary{cursor:pointer}.technical-details pre{white-space:pre-wrap;word-break:break-word;max-height:240px;overflow:auto;background:#070b10;border:1px solid var(--border);padding:9px;color:#b9c6d4;font:9px var(--mono)}.advanced-note{margin-top:10px;color:var(--muted);font-size:9px;line-height:1.5}.alert-list{display:flex;flex-direction:column;gap:7px}.alert{display:flex;align-items:flex-start;gap:7px;padding:9px;border-left:3px solid var(--yellow);background:#0b1118;color:#dbe4ed;font-size:11px}.alert.critical{border-left-color:var(--red)}.alert.warning{border-left-color:var(--yellow)}.all-good{display:flex;align-items:center;gap:7px;color:var(--green);font-size:11px;padding:5px}.workflow-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #18202a}.workflow-row strong{font:600 10px var(--mono)}.workflow-row span:not(.status-badge){color:var(--muted);font:9px var(--mono)}.empty{padding:20px 8px;text-align:center;border:1px dashed var(--border2);color:var(--muted);font-size:11px}.app-shell footer{max-width:1400px;margin:12px auto 0;color:#566473;text-align:center;font:9px var(--mono);letter-spacing:.5px}@media(max-width:1050px){.metric-grid{grid-template-columns:repeat(2,1fr)}.two-column{grid-template-columns:1fr}.api-control{min-width:220px}}@media(max-width:680px){.app-shell{padding:9px}.topbar{position:static;flex-wrap:wrap}.connection{order:3}.api-control{min-width:100%;max-width:none}.metric-grid{grid-template-columns:1fr 1fr}.queue-grid{grid-template-columns:1fr 1fr}.active-card{grid-template-columns:8px 1fr}.active-worker,.active-status{grid-column:2}.detail-grid,.advanced-grid{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.active-pulse{animation:none}}
 `;
+
+// Keep the product styling self-contained so the supplied frontend can be dropped in
+// without depending on a CSS framework.
+if (typeof document !== "undefined") {
+  const style = document.createElement("style");
+  style.dataset.workergrid = "v3";
+  style.textContent = CSS;
+  document.head.appendChild(style);
+}

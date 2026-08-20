@@ -1,0 +1,25 @@
+{
+  "name": "demo-pipeline",
+  "tasks": [
+    {
+      "key": "prepare",
+      "type": "prepare",
+      "payload": {"duration": 1},
+      "priority": "HIGH"
+    },
+    {
+      "key": "process",
+      "type": "process",
+      "payload": {"duration": 2},
+      "priority": "MEDIUM",
+      "depends_on": ["prepare"]
+    },
+    {
+      "key": "finish",
+      "type": "finish",
+      "payload": {"duration": 1},
+      "priority": "LOW",
+      "depends_on": ["process"]
+    }
+  ]
+}

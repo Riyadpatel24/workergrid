@@ -1,20 +1,10 @@
-# Python
 __pycache__/
 *.py[cod]
-*.pyo
-
-# Virtual Environment
 venv/
 .venv/
-
-# Environment Variables
+node_modules/
+dist/
 .env
-
-# IDE
 .vscode/
 .idea/
-
-# OS
 .DS_Store
-
-.env

@@ -1,44 +1,32 @@
-from sqlalchemy import Column
-from sqlalchemy import Integer
-from sqlalchemy import String
-from sqlalchemy import JSON
-from sqlalchemy import DateTime
-
-from datetime import datetime
-
+from sqlalchemy import Column, DateTime, Integer, JSON, String
 from app.db.database import Base
+from app.core.time import utcnow_naive
 
 
 class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(Integer, primary_key=True, index=True)
-
-    # Task Information
-    type = Column(String)
-    payload = Column(JSON)
+    type = Column(String, nullable=False)
+    payload = Column(JSON, nullable=False, default=dict)
     result = Column(JSON, nullable=True)
 
-    # Task State
-    status = Column(String, default="PENDING")
+    status = Column(String, default="PENDING", index=True)
+    priority = Column(String, default="MEDIUM", index=True)
 
-    # Priority
-    priority = Column(String, default="MEDIUM")
-
-    # Retry Information
     retries = Column(Integer, default=0)
     max_retries = Column(Integer, default=3)
 
-    # Scheduling
-    scheduled_at = Column(DateTime, default=datetime.utcnow)
-
-    # Timing
-    created_at = Column(DateTime, default=datetime.utcnow)
+    scheduled_at = Column(DateTime, default=utcnow_naive, index=True)
+    created_at = Column(DateTime, default=utcnow_naive, index=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    
-    # Worker Tracking
-    worker_id = Column(Integer, nullable=True)
-    
-    # Error Tracking
+
+    worker_id = Column(Integer, nullable=True, index=True)
+    required_capability = Column(String, nullable=True, index=True)
+
+    workflow_id = Column(String, nullable=True, index=True)
+    workflow_key = Column(String, nullable=True)
+    depends_on = Column(JSON, nullable=False, default=list)
+
     last_error = Column(String, nullable=True)
