@@ -36,6 +36,9 @@ class Task(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-
+    
+    # Worker Tracking
+    worker_id = Column(Integer, nullable=True)
+    
     # Error Tracking
     last_error = Column(String, nullable=True)

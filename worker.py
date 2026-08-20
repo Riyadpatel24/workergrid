@@ -50,6 +50,7 @@ def process_task(task_id: int):
 
         task.status = "PROCESSING"
         task.started_at = datetime.utcnow()
+        task.worker_id = WORKER_ID
 
         db.commit()
 

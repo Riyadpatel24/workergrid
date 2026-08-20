@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from app.queue.queue_manager import enqueue_task
 from fastapi import Request
 from fastapi.responses import HTMLResponse
@@ -28,6 +29,17 @@ import time
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 templates = Jinja2Templates(
     directory="app/templates"
@@ -103,10 +115,30 @@ def get_task(
             "error": "Task not found"
         }
 
+    processing_time = None
+
+    if task.started_at and task.completed_at:
+        processing_time = round(
+            (
+                task.completed_at -
+                task.started_at
+            ).total_seconds(),
+            2
+        )
+
     return {
         "id": task.id,
         "type": task.type,
         "status": task.status,
+        "priority": task.priority,
+
+        "worker_id": task.worker_id,
+
+        "started_at": task.started_at,
+        "completed_at": task.completed_at,
+
+        "processing_time": processing_time,
+
         "payload": task.payload,
         "result": task.result
     }
