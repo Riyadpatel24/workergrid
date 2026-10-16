@@ -46,7 +46,10 @@ def release_dependents(db, completed_task: Task):
                     task.status = "SCHEDULED"
                 else:
                     task.status = "PENDING"
-                    enqueue_task(task.id, task.priority)
+                    try:
+                        enqueue_task(task.id, task.priority)
+                    except Exception as q_err:
+                        print(f"[WorkflowManager] Warning: Could not enqueue task {task.id}: {q_err}")
                 changed = True
 
         if changed:

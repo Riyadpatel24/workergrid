@@ -5,3 +5,8 @@ psycopg2-binary
 redis
 pydantic
 psutil
+PyJWT
+bcrypt
+passlib
+cryptography
+python-multipart

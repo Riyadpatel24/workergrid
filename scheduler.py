@@ -25,7 +25,8 @@ def schedule_tasks():
         db.close()
 
 
-print("Scheduler Service Started...")
-while True:
-    schedule_tasks()
-    time.sleep(CHECK_INTERVAL)
+if __name__ == "__main__":
+    print("Scheduler Service Started...")
+    while True:
+        schedule_tasks()
+        time.sleep(CHECK_INTERVAL)

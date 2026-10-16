@@ -20,15 +20,22 @@ def normalize_priority(priority: str) -> str:
 def enqueue_task(task_id: int, priority: str):
     priority = normalize_priority(priority)
     queue = QUEUE_NAMES[priority]
-    redis_client.rpush(queue, task_id)
-    print(f"[QueueManager] Task {task_id} added to {queue}")
+    try:
+        redis_client.rpush(queue, task_id)
+        print(f"[QueueManager] Task {task_id} added to {queue}")
+    except Exception as e:
+        print(f"[QueueManager] Warning: Could not enqueue task {task_id} to Redis: {e}")
     return queue
 
 
 def queue_depths():
-    return {
-        "high": redis_client.llen(HIGH_QUEUE),
-        "medium": redis_client.llen(MEDIUM_QUEUE),
-        "low": redis_client.llen(LOW_QUEUE),
-        "dead_letter": redis_client.llen("dead_letter_queue"),
-    }
+    try:
+        return {
+            "high": redis_client.llen(HIGH_QUEUE),
+            "medium": redis_client.llen(MEDIUM_QUEUE),
+            "low": redis_client.llen(LOW_QUEUE),
+            "dead_letter": redis_client.llen("dead_letter_queue"),
+        }
+    except Exception:
+        return {"high": 0, "medium": 0, "low": 0, "dead_letter": 0}
+

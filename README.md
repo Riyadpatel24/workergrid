@@ -1,94 +1,108 @@
-# WorkerGrid v2.0 + v3.0
+# WorkerGrid + Project Friction
 
-WorkerGrid is a distributed task-processing system built with FastAPI, Redis, PostgreSQL and Python workers.
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/Riyadpatel24/workergrid)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688.svg)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18.0-61dafb.svg)](https://reactjs.org/)
 
-## v2.0 completed scope
+**WorkerGrid** is a production-grade distributed task execution, workflow orchestration, and worker management engine.
 
-- Priority queues: HIGH / MEDIUM / LOW
-- Delayed scheduling
-- Worker registry and heartbeats
-- Task-to-worker persistence
-- Retries and Dead Letter Queue
-- Recovery monitor
-- Task listing and detailed execution history
-- Client-oriented dashboard APIs
-- CORS-enabled React integration
+**Project Friction** is a developer productivity and workflow analytics application built on top of WorkerGrid. It executes multi-stage DAG workflows to collect GitHub repository signals, calculate code review and CI/CD friction metrics, generate severity-classified indicators with evidence, and provide actionable engineering recommendations.
 
-## v3.0 functional baseline
+---
 
-- Workflow DAGs with dependency validation
-- Dependency-aware task release
-- Worker capabilities
-- Control-plane resource snapshot
-- Scaling recommendations
-- Manual task retry/cancel operations
-- Improved autonomous recovery
-- Expanded observability
+## Key Features
 
-The v3 control plane intentionally exposes **advisory scaling recommendations** rather than spawning local processes invisibly. Actual worker deployment/scaling remains an infrastructure concern (Docker/Kubernetes/cloud).
+### WorkerGrid Core Platform
+- **Multi-Tenant Task Processing**: Strict server-side user data isolation and ownership enforcement (`user_id`).
+- **Priority-Based Dispatch**: Priority queues (`HIGH`, `MEDIUM`, `LOW`) with real-time Redis push/pop dispatching.
+- **DAG Workflow Engine**: Multi-stage task dependency graphs with state persistence and automatic dependency release.
+- **Capability Routing**: Automatic matching of task requirements (`general`, `friction`, `github`) to specialized worker pools.
+- **Fault Tolerance & DLQ**: Automatic retries with exponential backoff delay and Dead-Letter Queue (DLQ) routing for exhausted tasks.
+- **Scheduled Subsystem**: Time-based task activation for deferred and periodic execution.
 
-## Start
+### Project Friction Application
+- **4-Stage DAG Workflow**:
+  $$\text{friction\_init} \longrightarrow \text{friction\_collect\_github} \longrightarrow \text{friction\_calc\_metrics} \longrightarrow \text{friction\_generate\_report}$$
+- **GitHub OAuth Integration**: Secure user-level OAuth 2.0 authorization with token encryption at rest.
+- **Friction Scorecard**: Dimension scoring across Code Review, CI/CD, Backlog Staleness, and Delivery Velocity.
+- **Evidence & Indicator Breakdown**: Severity-ranked indicators (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`) linked directly to external GitHub PR, issue, and workflow run evidence.
 
-1. Start infrastructure:
+---
 
-```powershell
-docker compose up -d
-```
+## Technology Stack
 
-2. Install Python dependencies:
+- **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0, Uvicorn / Gunicorn
+- **Database**: PostgreSQL (Production) / SQLite (Development & Testing)
+- **Caching & Queuing**: Redis (Priority Queues, Worker Heartbeats, DLQ)
+- **Security & OAuth**: Fernet Symmetric Token Encryption (`cryptography`), PyJWT, Bcrypt, HttpOnly Cookies
+- **Frontend**: React 18, Vite, Lucide Icons, Vanilla CSS Design System
 
-```powershell
+---
+
+## Quickstart & Local Setup
+
+### 1. Prerequisites
+- Python 3.10+
+- Node.js 18+
+- PostgreSQL & Redis (optional for unit testing, required for local live execution)
+
+### 2. Backend Setup
+```bash
+# Clone repository
+git clone https://github.com/Riyadpatel24/workergrid.git
+cd workergrid
+
+# Create & activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Copy environment template
+cp .env.example .env
+
+# Run database migrations
+psql -U workergrid -d workergrid -f migrations/v1_init.sql
+psql -U workergrid -d workergrid -f migrations/v5_multi_user.sql
+psql -U workergrid -d workergrid -f migrations/v6_multi_tenant_isolation.sql
+
+# Start FastAPI API server
+uvicorn main:app --reload --port 8000
 ```
 
-3. Apply the database migration once:
-
-```powershell
-docker exec -i workergrid_postgres psql -U workergrid -d workergrid < migrations/v3.sql
+### 3. Worker Setup
+```bash
+# Start worker process with capabilities
+WORKER_CAPABILITIES=general,friction,github python worker.py
 ```
 
-4. Start API:
-
-```powershell
-python -m uvicorn main:app --reload
-```
-
-5. Start scheduler, recovery monitor and one or more workers in separate terminals:
-
-```powershell
-python scheduler.py
-python recovery_monitor.py
-python worker.py
-```
-
-6. Frontend:
-
-```powershell
+### 4. Frontend Setup
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## Important payload controls for demos
+Visit `http://localhost:5173` to access the WorkerGrid platform and Project Friction application.
 
-`duration` controls demo processing duration in seconds.
+---
 
-`fail: true` forces a failure and exercises retry/DLQ handling.
+## Testing & Verification
 
-`crash: true` simulates a worker crash for recovery testing.
+```bash
+# Run backend test suite (48 tests)
+python -m unittest discover -s tests
 
-## API
+# Run frontend linting & production build
+cd frontend
+npm run lint
+npm run build
+```
 
-- `GET /health`
-- `POST /tasks`
-- `GET /tasks`
-- `GET /tasks/{id}`
-- `POST /tasks/{id}/retry`
-- `POST /tasks/{id}/cancel`
-- `GET /workers`
-- `GET /stats`
-- `GET /queues/priority`
-- `GET /dashboard`
-- `POST /workflows`
-- `GET /workflows/{workflow_id}`
-- `GET /control-plane`
+---
+
+## License
+Distributed under the MIT License.

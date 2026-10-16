@@ -1,0 +1,74 @@
+# render.yaml — WorkerGrid + Project Friction
+# Render Blueprint for deploying the full stack to Render.com.
+#
+# Services:
+#   workergrid-api    — FastAPI Web Service (public HTTP endpoint)
+#   workergrid-worker — Background Worker (private, continuously running)
+#
+# Databases are provisioned separately in the Render dashboard (see DEPLOYMENT.md).
+# Environment variable values marked with sync: false MUST be set in the Render dashboard.
+# Never commit actual secret values here.
+
+services:
+  # ----------------------------------------------
+  # 1. FastAPI API (Web Service)
+  # ----------------------------------------------
+  - type: web
+    name: workergrid-api
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_REDIRECT_URI
+        sync: false
+      - key: GITHUB_OAUTH_SCOPES
+        value: repo,read:user
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: WORKER_CAPABILITIES
+        value: general,friction,github
+
+  # ----------------------------------------------
+  # 2. WorkerGrid Background Worker
+  # ----------------------------------------------
+  - type: worker
+    name: workergrid-worker
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
+
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: WORKER_CAPABILITIES
+        value: general,friction,github
+      - key: ENVIRONMENT
+        value: production

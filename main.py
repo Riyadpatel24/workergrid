@@ -1,5 +1,7 @@
+import os
 from datetime import datetime, timedelta
 from uuid import uuid4
+
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,22 +16,41 @@ from app.api.schemas import TaskCreate, WorkflowCreate
 from app.db.database import Base, engine
 from app.db.dependencies import get_db
 from app.models.task import Task
+import app.models.friction  # noqa: F401 - Register Project Friction models with Base metadata
+import app.models.user  # noqa: F401 - Register User models with Base metadata
 from app.queue.queue_manager import enqueue_task, normalize_priority, queue_depths
+
 from app.queue.redis_client import redis_client
 from app.services.resource_manager import resource_snapshot
 from app.core.time import utcnow_naive
 from app.services.workflow_manager import release_dependents
+from app.api.friction_router import router as friction_router
+from app.api.auth_router import router as auth_router
 
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"[Main] Warning: Could not run Base.metadata.create_all on startup: {e}")
+
 
 app = FastAPI(title="WorkerGrid API", version="3.0.0")
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
+app.include_router(friction_router)
+
 
 templates = Jinja2Templates(directory="app/templates")
 try:
@@ -66,6 +87,10 @@ def serialize_task(task: Task):
     }
 
 
+from app.api.deps import get_current_user, get_optional_current_user
+from app.models.user import User
+
+
 @app.get("/")
 def root():
     return {"message": "WorkerGrid Running", "version": "3.0.0", "status": "healthy"}
@@ -87,10 +112,16 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.post("/tasks")
-def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+def create_task(
+    task: TaskCreate,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
     priority = normalize_priority(task.priority)
     now = utcnow_naive()
+    user_id = current_user.id if current_user else None
     new_task = Task(
+        user_id=user_id,
         type=task.type,
         payload=task.payload,
         status="SCHEDULED" if task.delay > 0 else "PENDING",
@@ -118,9 +149,15 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
 def list_tasks(
     limit: int = Query(default=20, ge=1, le=100),
     status: str | None = None,
+    current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Task)
+    if current_user:
+        query = query.filter(Task.user_id == current_user.id)
+    else:
+        query = query.filter(Task.user_id.is_(None))
+
     if status:
         query = query.filter(Task.status == status.upper())
     tasks = query.order_by(Task.created_at.desc()).limit(limit).all()
@@ -128,16 +165,36 @@ def list_tasks(
 
 
 @app.get("/tasks/{task_id}")
-def get_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter(Task.id == task_id).first()
+def get_task(
+    task_id: int,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Task).filter(Task.id == task_id)
+    if current_user:
+        query = query.filter(Task.user_id == current_user.id)
+    else:
+        query = query.filter(Task.user_id.is_(None))
+
+    task = query.first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return serialize_task(task)
 
 
 @app.post("/tasks/{task_id}/retry")
-def retry_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter(Task.id == task_id).first()
+def retry_task(
+    task_id: int,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Task).filter(Task.id == task_id)
+    if current_user:
+        query = query.filter(Task.user_id == current_user.id)
+    else:
+        query = query.filter(Task.user_id.is_(None))
+
+    task = query.first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status not in {"FAILED", "SUCCESS"}:
@@ -154,8 +211,18 @@ def retry_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/tasks/{task_id}/cancel")
-def cancel_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter(Task.id == task_id).first()
+def cancel_task(
+    task_id: int,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Task).filter(Task.id == task_id)
+    if current_user:
+        query = query.filter(Task.user_id == current_user.id)
+    else:
+        query = query.filter(Task.user_id.is_(None))
+
+    task = query.first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status in {"SUCCESS", "FAILED", "CANCELLED"}:
@@ -233,7 +300,11 @@ def get_priority_queues():
 
 
 @app.post("/workflows")
-def create_workflow(workflow: WorkflowCreate, db: Session = Depends(get_db)):
+def create_workflow(
+    workflow: WorkflowCreate,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
     keys = {item.key for item in workflow.tasks}
     if len(keys) != len(workflow.tasks):
         raise HTTPException(status_code=422, detail="Workflow task keys must be unique")
@@ -256,8 +327,10 @@ def create_workflow(workflow: WorkflowCreate, db: Session = Depends(get_db)):
     workflow_id = str(uuid4())
     key_to_id = {}
     now = utcnow_naive()
+    user_id = current_user.id if current_user else None
     for item in workflow.tasks:
         task = Task(
+            user_id=user_id,
             type=item.type,
             payload=item.payload,
             status="WAITING" if item.depends_on else ("SCHEDULED" if item.delay else "PENDING"),
@@ -287,8 +360,18 @@ def create_workflow(workflow: WorkflowCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/workflows/{workflow_id}")
-def get_workflow(workflow_id: str, db: Session = Depends(get_db)):
-    tasks = db.query(Task).filter(Task.workflow_id == workflow_id).order_by(Task.id).all()
+def get_workflow(
+    workflow_id: str,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Task).filter(Task.workflow_id == workflow_id)
+    if current_user:
+        query = query.filter(Task.user_id == current_user.id)
+    else:
+        query = query.filter(Task.user_id.is_(None))
+
+    tasks = query.order_by(Task.id).all()
     if not tasks:
         raise HTTPException(status_code=404, detail="Workflow not found")
     statuses = [task.status for task in tasks]
@@ -301,6 +384,7 @@ def get_workflow(workflow_id: str, db: Session = Depends(get_db)):
     else:
         status = "WAITING"
     return {"workflow_id": workflow_id, "status": status, "tasks": [serialize_task(t) for t in tasks]}
+
 
 
 @app.get("/control-plane")

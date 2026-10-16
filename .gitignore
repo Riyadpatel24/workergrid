@@ -1,10 +1,33 @@
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Virtual environments
 venv/
 .venv/
+
+# Node / frontend build artifacts
 node_modules/
 dist/
+
+# Environment files (NEVER commit real credentials)
 .env
+.env.local
+.env.production
+.env.*.local
+
+# Editor configs
 .vscode/
 .idea/
+
+# OS artifacts
 .DS_Store
+Thumbs.db

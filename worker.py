@@ -10,11 +10,12 @@ from app.models.task import Task
 from app.queue.queue_manager import enqueue_task
 from app.queue.redis_client import redis_client
 from app.services.workflow_manager import release_dependents
+from project_friction.tasks import dispatch_task
 
 WORKER_ID = os.getpid()
 HOSTNAME = socket.gethostname()
 WORKER_VERSION = "3.0"
-CAPABILITIES = [x.strip() for x in os.getenv("WORKER_CAPABILITIES", "general").split(",") if x.strip()]
+CAPABILITIES = [x.strip() for x in os.getenv("WORKER_CAPABILITIES", "general,friction,github").split(",") if x.strip()]
 MAX_RETRIES = 3
 BASE_DELAY = 2
 
@@ -52,15 +53,20 @@ def process_task(task_id: int):
         task.worker_id = WORKER_ID
         db.commit()
 
-        redis_client.hset(worker_key(), mapping={"status": "BUSY", "current_task": task.id})
-        print(f"[Worker {WORKER_ID}] Task {task_id} started")
+        try:
+            redis_client.hset(worker_key(), mapping={"status": "BUSY", "current_task": task.id})
+        except Exception:
+            pass
+        print(f"[Worker {WORKER_ID}] Task {task_id} ({task.type}) started")
 
         if task.payload.get("crash"):
             print(f"[Worker {WORKER_ID}] Simulating crash...")
             os._exit(1)
 
-        duration = max(0, min(int(task.payload.get("duration", 2)), 300))
-        time.sleep(duration)
+        handled = dispatch_task(task.type, db, task.payload)
+        if not handled:
+            duration = max(0, min(int(task.payload.get("duration", 0)), 300))
+            time.sleep(duration)
 
         if task.payload.get("fail"):
             raise Exception("Simulated failure")
@@ -88,9 +94,13 @@ def process_task(task_id: int):
             task.started_at = None
             task.completed_at = None
             db.commit()
-            clear_current_task()
+            try:
+                clear_current_task()
+            except Exception:
+                pass
             print(f"[Worker {WORKER_ID}] Retry {task.retries} in {delay} seconds...")
-            time.sleep(delay)
+            if delay > 0:
+                time.sleep(delay)
             enqueue_task(task.id, task.priority)
             print(f"[Worker {WORKER_ID}] Task {task_id} retry {task.retries}")
         else:
@@ -98,9 +108,15 @@ def process_task(task_id: int):
             task.completed_at = utcnow_naive()
             task.result = {"error": str(exc)}
             db.commit()
-            redis_client.rpush("dead_letter_queue", task.id)
-            clear_current_task()
-            redis_client.hincrby(worker_key(), "failed_tasks", 1)
+            try:
+                redis_client.rpush("dead_letter_queue", task.id)
+            except Exception as r_err:
+                print(f"[Worker {WORKER_ID}] Warning: Could not push to DLQ in Redis: {r_err}")
+            try:
+                clear_current_task()
+                redis_client.hincrby(worker_key(), "failed_tasks", 1)
+            except Exception:
+                pass
             release_dependents(db, task)
             print(f"[Worker {WORKER_ID}] Task {task_id} moved to DLQ")
     finally:
@@ -123,15 +139,16 @@ def register_worker():
     print(f"[Worker {WORKER_ID}] Registered capabilities={CAPABILITIES}")
 
 
-register_worker()
+if __name__ == "__main__":
+    register_worker()
 
-while True:
-    send_heartbeat()
-    task = redis_client.lpop("high_priority_queue")
-    if not task:
-        task = redis_client.lpop("medium_priority_queue")
-    if not task:
-        task = redis_client.lpop("low_priority_queue")
-    if task:
-        process_task(int(task))
-    time.sleep(1)
+    while True:
+        send_heartbeat()
+        task = redis_client.lpop("high_priority_queue")
+        if not task:
+            task = redis_client.lpop("medium_priority_queue")
+        if not task:
+            task = redis_client.lpop("low_priority_queue")
+        if task:
+            process_task(int(task))
+        time.sleep(1)
