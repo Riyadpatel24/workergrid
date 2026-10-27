@@ -12,3 +12,4 @@ cryptography
 python-multipart
 Jinja2
 psycopg[binary]
+email-validator
