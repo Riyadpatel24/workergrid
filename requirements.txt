@@ -10,3 +10,4 @@ bcrypt
 passlib
 cryptography
 python-multipart
+Jinja2
